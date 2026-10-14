@@ -1,0 +1,72 @@
+title: "[Announcement] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Maintainer announcement
+
+        Use this form for material project changes that should be easy to
+        reconstruct later: releases, roadmap changes, design decisions,
+        governance updates, maintenance windows, and breaking changes.
+
+        Announcements are the project's authoritative state transitions.
+        Link the evidence that grounds each transition and be explicit about
+        who must act, what changes, and when it takes effect.
+  - type: dropdown
+    id: announcement_type
+    attributes:
+      label: Announcement type
+      description: Select the signal being sent to the community.
+      options:
+        - Release
+        - Roadmap
+        - Research note
+        - Design decision
+        - Policy or governance
+        - Maintenance or deprecation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: Executive summary
+      description: State the change and the reason for it in a few sentences.
+      placeholder: "S1-Core is changing... because..."
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact and compatibility
+      description: Explain what users, integrations, behavior, APIs, performance, calibration, or audit workflows this affects.
+      placeholder: "- Affected: ...\n- Unaffected: ...\n- Compatibility: ..."
+    validations:
+      required: true
+  - type: textarea
+    id: action_required
+    attributes:
+      label: Action required
+      description: Give direct commands, migration steps, deadlines, or explicitly state that no action is required.
+      value: |
+        1. 
+        2. 
+        3. 
+    validations:
+      required: true
+  - type: input
+    id: effective_date
+    attributes:
+      label: Effective date or version
+      description: Give the date, tag, commit, or release boundary for the change.
+      placeholder: "Immediately", "v0.2.0", or "2026-10-14"
+    validations:
+      required: false
+  - type: textarea
+    id: references
+    attributes:
+      label: References and evidence
+      description: Link the related release, pull request, benchmark, audit artifact, RFC, or prior discussion.
+      placeholder: "- https://github.com/acbcore-labs/s1-core/..."
+    validations:
+      required: false

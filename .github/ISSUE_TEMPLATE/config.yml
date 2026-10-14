@@ -1,0 +1,14 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Ask a question
+    url: https://github.com/acbcore-labs/s1-core/discussions/new?category=q-a
+    about: Use Q&A for setup, adapter, calibration, audit, replay, and architecture questions.
+  - name: Propose an idea
+    url: https://github.com/acbcore-labs/s1-core/discussions/new?category=ideas
+    about: Start research, capability, API, and roadmap proposals here before scoping an issue.
+  - name: Share a use case
+    url: https://github.com/acbcore-labs/s1-core/discussions/new?category=show-and-tell
+    about: Show an experiment, integration, benchmark, or backend adapter with reproducible evidence.
+  - name: General community discussion
+    url: https://github.com/acbcore-labs/s1-core/discussions/new?category=general
+    about: Discuss ecosystem coordination, documentation, governance, and topics that are not actionable issues yet.

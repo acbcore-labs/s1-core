@@ -1,0 +1,68 @@
+title: "[General] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Open community discussion
+
+        Use General for open-ended coordination that does not fit Q&A,
+        Ideas, Polls, or Show & Tell. Keep one discussion centered on one
+        coherent question or decision space.
+
+        A strong discussion identifies the current state, the desired state,
+        the mechanism that should propagate from one to the other, and the
+        correction against which the proposal should be checked.
+  - type: textarea
+    id: objective
+    attributes:
+      label: What are we trying to decide or understand?
+      description: Make the discussion objective explicit and searchable.
+    validations:
+      required: true
+  - type: dropdown
+    id: primary_area
+    attributes:
+      label: Primary area
+      options:
+        - Public API and packaging
+        - Specification compiler
+        - Deterministic augmentation
+        - DAG and wave scheduling
+        - Gates and calibration
+        - Audit and replay
+        - Backend adapters
+        - Documentation and examples
+        - Community and governance
+        - Other or unknown
+    validations:
+      required: true
+  - type: textarea
+    id: current_state
+    attributes:
+      label: Current state observed
+      description: Describe what exists today. Link code, docs, examples, or discussions where useful.
+    validations:
+      required: true
+  - type: textarea
+    id: desired_outcome
+    attributes:
+      label: Desired outcome
+      description: Describe the observable state that would make this discussion complete.
+    validations:
+      required: true
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints, objections, and correction mechanism
+      description: Name competing requirements, known risks, and what evidence or counterproposal would change your mind.
+    validations:
+      required: false
+  - type: textarea
+    id: references
+    attributes:
+      label: References
+      description: Link related pull requests, issues, discussions, benchmarks, specifications, or research.
+      value: |
+        - 
+    validations:
+      required: false

@@ -1,0 +1,75 @@
+title: "[Idea] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Idea or lightweight RFC
+
+        Propose a capability, direction, or design change. Define the
+        problem space before choosing loops, tensors, classes, or APIs. An
+        idea becomes actionable when it includes evidence, an opposing
+        hypothesis, and explicit acceptance criteria.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or capability gap
+      description: What user, developer, operator, or research problem exists today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed mechanism
+      description: Describe the mechanism, contract, invariant, operator, or workflow in implementation-independent terms.
+    validations:
+      required: true
+  - type: dropdown
+    id: primary_area
+    attributes:
+      label: Primary area
+      options:
+        - Specification compiler
+        - Deterministic preprocessing
+        - DAG and wave scheduling
+        - Gates and calibration
+        - Audit, provenance, and replay
+        - Backend integrations
+        - Developer experience
+        - Documentation and examples
+        - Research direction
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence and measurements
+      description: Include reproductions, benchmarks, traces, replay digests, prior art, or observations that motivate the idea.
+    validations:
+      required: false
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and counterproposal
+      description: Compare at least one serious alternative and state why it loses, or state what evidence would make it win.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: Acceptance criteria
+      description: How would we objectively decide that this idea should become an issue, RFC, or pull request?
+      value: |
+        - [ ] Scope is bounded and does not replace clear defect reports
+        - [ ] Expected external behavior and invariants are stated
+        - [ ] Evidence or a measurement plan is included
+        - [ ] Migration, compatibility, and operating cost are considered
+    validations:
+      required: true
+  - type: checkboxes
+    id: readiness
+    attributes:
+      label: Readiness check
+      options:
+        - label: I searched existing discussions and could not find an equivalent proposal.
+          required: true

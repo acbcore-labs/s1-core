@@ -1,0 +1,70 @@
+title: "[Show & Tell] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Project evidence, experiments, and integrations
+
+        Share a working use case, backend adapter, benchmark, or experiment.
+        Results are most useful when others can reconstruct them from the
+        prompts, examples, logs, measurements, model identity, and revision
+        that generated them.
+  - type: input
+    id: use_case
+    attributes:
+      label: Use case, adapter, or experiment name
+    validations:
+      required: true
+  - type: input
+    id: backend
+    attributes:
+      label: Backend or model
+      description: Include the model identity where applicable.
+      placeholder: "LexicalHeuristicDriver", "jev-latest", "custom ONNX driver"
+    validations:
+      required: true
+  - type: textarea
+    id: overview
+    attributes:
+      label: What does it do?
+      description: Explain the decision pipeline, decision domain, and stage highlighted by the example.
+    validations:
+      required: true
+  - type: textarea
+    id: demonstration
+    attributes:
+      label: How to reproduce it
+      description: Include the repository, branch, script, commands, and any setup needed to run it.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Measured outcome
+      description: Report latency, fan-out, token use, calibration, coverage, decision quality, or other measured results. Distinguish live backend results from offline toy results.
+    validations:
+      required: true
+  - type: textarea
+    id: epistemics
+    attributes:
+      label: Abstention and failure behavior
+      description: Describe rejected, bimodal, out-of-domain, and skipped-dependency behavior. State whether replay was byte-identical when relevant.
+    validations:
+      required: false
+  - type: textarea
+    id: artifacts
+    attributes:
+      label: Artifacts and references
+      description: Link examples, logs, notebooks, diagrams, audit excerpts, or publications.
+      value: |
+        - 
+    validations:
+      required: false
+  - type: textarea
+    id: open_questions
+    attributes:
+      label: Open questions
+      description: What feedback, alternative experiment, or counterevidence would most improve this work?
+    validations:
+      required: false
