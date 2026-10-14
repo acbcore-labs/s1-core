@@ -1,0 +1,11 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+
+# Local example artifacts (audit ledgers are per-run)
+examples/*_audit.jsonl
