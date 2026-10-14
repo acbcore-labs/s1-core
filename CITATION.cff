@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+message: >-
+  If you use S1-Core in research, please cite this repository.
+title: >-
+  S1-Core: a System 1 Inference Model Harness
+authors:
+  - name: acbcore-labs
+type: software
+version: 0.1.0
+date-released: "2026-10-14"
+license: MIT
+repository-code: "https://github.com/acbcore-labs/s1-core"
+keywords:
+  - system-1-inference
+  - decision-models
+  - llm-harness
+  - calibration
+  - conformal-prediction
+  - auditability
+  - jev
+abstract: >-
+  A deterministic control loop around System 1 (decision) models such as
+  TypeSafe's Jev: declarative choice/score/noul question specs with
+  compile-time validation, deterministic fact precomputation, wave-parallel
+  execution, scale-invariant calibration and conformal admissibility gates,
+  and a content-addressed, hash-chained audit ledger with byte-identical
+  verdict replay. Python >= 3.14, zero dependencies.

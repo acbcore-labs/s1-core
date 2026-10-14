@@ -7,6 +7,8 @@ name = "s1core"
 version = "0.1.0"
 description = "S1-Core: a generalized System 1 inference harness — a deterministic control loop around bounded stochastic decision models."
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.14"
 authors = [{ name = "acbcore-labs" }]
 dependencies = []

@@ -1,5 +1,18 @@
 # S1-Core — a System 1 Inference Model Harness
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.14%2B-blue.svg)](https://www.python.org/)
+[![Dependencies](https://img.shields.io/badge/dependencies-zero-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-86%20passing-brightgreen.svg)]()
+
+**S1-Core is a Python harness for System 1 inference models** (decision
+models like TypeSafe's Jev): models that classify, score, and gate in a
+single forward pass instead of generating text. It wraps any such backend —
+hosted APIs, local MLX/ONNX decoders, llama.cpp logit extractors — in a
+deterministic control loop with fail-closed calibration gates, conformal
+prediction thresholds, topological wave batching, and a hash-chained,
+byte-identical replay audit ledger.
+
 A deterministic control loop around **System 1 (decision) models** — models
 like Jev that evaluate a shared state in a single parallel forward pass and
 return typed values, discrete probability distributions, and calibrated
@@ -11,7 +24,18 @@ admissibility gates, and a content-addressed audit ledger before application
 code sees anything. **A value is released if and only if the harness can
 defend it** (fail-closed, `wrong == 0` admissibility boundary).
 
-Python ≥ 3.14, zero dependencies (stdlib only).
+Python ≥ 3.14, zero dependencies (stdlib only). Licensed under
+[MIT](LICENSE).
+
+**Contents:** [60-second version](#the-60-second-version) ·
+[Five-stage pipeline](#the-five-stage-pipeline--module-map) ·
+[Configuration (.env)](#configuration--env-live-backend) ·
+[Proof of outcomes](#proof-of-outcomes--what-the-harness-demonstrably-provides) ·
+[Adapt a use case](#adapting-to-a-new-use-case-your-project) ·
+[Adapt a backend](#adapting-to-a-new-system-1-model-the-backend-seam) ·
+[Failure modes](#failure-mode-coverage-design-doc-part-1-3) ·
+[Design notes](#design-law-notes-mechanical-sympathy--semantic-rigor--third-door) ·
+[Layout](#layout)
 
 ---
 
