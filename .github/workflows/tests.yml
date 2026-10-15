@@ -12,7 +12,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@v10
+      # Pinned by SHA: setup-uv publishes no rolling major tags.
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           enable-cache: true
       - name: Install Python 3.14 (managed fallback when no system interpreter matches)
