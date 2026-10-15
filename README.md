@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.14%2B-blue.svg)](https://www.python.org/)
 [![Dependencies](https://img.shields.io/badge/dependencies-zero-brightgreen.svg)]()
-[![Tests](https://img.shields.io/badge/tests-136%20passing-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-148%20passing-brightgreen.svg)]()
 
 **S1-Core is a Python harness for System 1 inference models** (decision
 models like TypeSafe's Jev): models that classify, score, and gate in a
@@ -26,6 +26,8 @@ Python ≥ 3.14, zero dependencies (stdlib only). Licensed under
 **Contents:** [60-second version](#the-60-second-version) ·
 [Five-stage pipeline](#the-five-stage-pipeline--module-map) ·
 [Installation & tests](#installation--tests) ·
+[The UI](#the-ui--watch-the-harness-think) ·
+[The examples](#the-examples--a-guided-tour) ·
 [Configuration (.env)](#configuration--env-live-backend) ·
 [Semantics and limits](#semantics-and-limits) ·
 [Proof of outcomes](#proof-of-outcomes--what-the-harness-demonstrably-provides) ·
@@ -33,6 +35,7 @@ Python ≥ 3.14, zero dependencies (stdlib only). Licensed under
 [Adapt a backend](#adapting-to-a-new-system-1-model-the-backend-seam) ·
 [Failure modes](#failure-mode-coverage-design-doc-part-1-3) ·
 [Design notes](#design-law-notes-mechanical-sympathy--semantic-rigor--third-door) ·
+[Design rationale](docs/DESIGN.md) ·
 [Layout](#layout)
 
 ---
@@ -108,23 +111,138 @@ expectation `s^`, gated on mode dispersion), `noul` (binary proposition →
 ```bash
 brew install uv                # or: curl -LsSf https://astral.sh/uv/install.sh | sh
 uv sync                        # .venv + editable s1core + dev tools, per uv.lock
-uv run pytest                  # 136 tests + enforced 100% coverage gate
+uv run pytest                  # 148 tests + enforced 100% coverage gate
 uv run python examples/refund_triage.py
 uv run python examples/orthogonal_pr_gate.py
 uv run python examples/calibrate_from_ledger.py
+uv run python examples/model_swap_certification.py
+uv run python examples/nightly_recalibration.py
+uv run python examples/cascade_router.py
 uv run python examples/proof_of_outcomes.py   # live scorecard when a key is configured
 ```
 
 **Without uv — the zero-dependency path (stdlib only):**
 
 ```bash
-PYTHONPATH=src python3 -m unittest discover -s tests   # 136 tests, offline
+PYTHONPATH=src python3 -m unittest discover -s tests   # 148 tests, offline
 ```
 
 CI (`.github/workflows/tests.yml`) runs both paths on Python 3.14 via
 `astral-sh/setup-uv`: the stdlib-only core suite, then the full suite under
 the enforced 100% line-coverage gate — no API keys, with the randomized
 `wrong == 0` replay sweep riding along in both.
+
+## The UI — watch the harness think
+
+```bash
+uv run python tools/ui/app.py        # opens http://127.0.0.1:8765 in your browser
+```
+
+A local, zero-dependency web console (stdlib `http.server`, vanilla JS, no
+build step) for running, inspecting, and interrogating the harness. If the
+README sections below are the *what*, the UI is the *see it happen*.
+
+**What to do with it, in the order you'll probably want to:**
+
+1. **Run a scenario.** The home screen runs the four workflows — refund
+   triage, model-swap certification, cascade routing, nightly
+   recalibration — as one click each. Every run lands on a *run view* whose
+   every number came from `s1core` this time you clicked.
+2. **Open the verdict inspector.** Click any row (or navigate with ↑/↓ and
+   Enter; Esc closes). You get the raw distribution with its gate boundaries
+   drawn *on* the chart — the top-1 floor line over the probability bars,
+   the noul gray zone as a shaded band, the score expectation marker — plus
+   pass/fail gauges for every threshold, the exact prose the model saw, and
+   the `@deterministic_facts`. When a verdict abstains, the one red gauge is
+   the reason; nothing else about the gate is hidden from you.
+3. **Drag the gate lab dials.** Sliders for top-1 floor, margin, entropy,
+   score AAD, temperature, and conformal τ re-run the pure Stage-4 gate over
+   the run's stored raw distributions (debounced, server-side) and show
+   exactly which verdicts flip. This is the fastest way to internalize what
+   `GatePolicy` does — and why thresholds are policy, not tuning knobs over
+   truth.
+4. **Fit calibration.** Runs with pinned outcome labels carry a calibration
+   panel: temperature on the older 60% of labeled samples, conformal τ on
+   the newer 40% (disjoint, as the fit requires), ECE before/after, measured
+   coverage, and the reliability chart.
+5. **Audit a ledger.** The loader's dropdown lists every audit ledger under
+   the repo (files whose first record carries the audit schema's digest —
+   not just any `.jsonl`), newest first, with record counts. Loading one
+   gives you chain verification, per-record replay checks, a stream filter,
+   and the hash-chained spine. `--allow DIR` extends the search to other
+   directories.
+6. **Compose.** The composer is a guided editor for declaring new
+   `choice`/`score`/`noul` questions — the compile-time prose lint fires
+   inline as a 422 with the exact message — plus a raw-state JSON pane and a
+   toy/live backend switch. It is the quickest way to feel Stage 1's
+   discipline before writing any code.
+
+**How it works** — the law is *the gate never lives in the browser*:
+
+- `tools/ui/app.py` is a stdlib `http.server` exposing a small JSON API —
+  evaluate, scenario runners, ledger load, gate sweep, calibration fit,
+  replay — where every route is a thin wrapper over the same `s1core` calls
+  the examples make. `static/app.js` is render-only: it draws what the
+  server computed and computes nothing itself, so what you see is exactly
+  what replay defends.
+- Runs live in an in-memory registry; `#/run/:id` links are shareable while
+  the server runs. Nothing is written to disk except by the harness's own
+  ledgers.
+- Security posture: binds `127.0.0.1` only; ledger paths must resolve under
+  the repo root or an `--allow` directory; the API key is never sent to the
+  page — only the model id and whether a live backend exists.
+
+## The examples — a guided tour
+
+| Example | Proves | See it in the UI |
+|---|---|---|
+| `refund_triage.py` | All five stages on real tickets | Home → *Refund triage*; writes `refund_triage_audit.jsonl`, which the ledger dropdown lists |
+| `orthogonal_pr_gate.py` | Orthogonal decomposition + combiners | Read alongside the composer's question model |
+| `calibrate_from_ledger.py` | Shadow-traffic distillation loop | Home → *Nightly recalibration* renders the same fits |
+| `model_swap_certification.py` | The promotion licence law | Home → *Model-swap certification* |
+| `nightly_recalibration.py` | Outcome-fed recalibration | Home → *Nightly recalibration* |
+| `cascade_router.py` | The gate as a cost dial | Home → *Cascade router* + the gate lab |
+| `proof_of_outcomes.py` | The measured scorecard | Standalone printout |
+
+Reading notes — what to look for in each:
+
+- **`refund_triage.py`** — under the toy sensor, `exceeds_total` lands in
+  the noul gray zone and the harness *withholds* the value: that
+  `ABSTAINED_GATE` is fail-closed working, not a bug. A dependency-gated
+  question comes back `SKIPPED_DEPENDENCY` — reported, never dropped. With
+  a key configured the same tickets run against live Jev unchanged.
+- **`orthogonal_pr_gate.py`** — five narrow signals in one parallel call
+  (~1.03× the tokens of one question), combined by `LatticeCombiner` /
+  `NoisyANDCombiner`. Against the live model, the merge-lane question chose
+  the escape hatch at p = 0.81 and the whole cascade abstained — the
+  recorded run in [Proof of outcomes](#proof-of-outcomes--what-the-harness-demonstrably-provides).
+- **`calibrate_from_ledger.py`** — `ShadowTeeDriver` mirrors production
+  traffic into a local model, paired with outcomes, then
+  `fit_gate_policy` promotes it: ECE 0.145 → 0.018, coverage 0.900 at
+  α = 0.10, zero application changes.
+- **`model_swap_certification.py`** — the production ledger is a frozen
+  eval set. After preflight (chain verified, every verdict replays
+  `wrong == 0`), candidates are judged by one law: ratify no wrong answer.
+  The regressed candidate is rejected with its wrongs *attributed* —
+  `refund_lane` on the two over-total orders; drift (JS divergence) is
+  reported as telemetry, never gated.
+- **`nightly_recalibration.py`** — temperature recovers the automation the
+  default gate refused (ratified 12.7% → 98.7% at ECE 0.36 → 0.03). The
+  residual wrong-while-ratified equals the sensor's confusion rate living
+  inside the α budget: calibration *prices* errors, it does not cure them —
+  which is what the other two workflows are for.
+- **`cascade_router.py`** — the permissive tier is cheapest and ships 5
+  wrong answers per 80 cases; default/strict ship zero at ~10× the cost;
+  the fitted conformal tier ships zero at ~7% of the default's cost by
+  catching dithering confusions as two-element prediction sets.
+- **`proof_of_outcomes.py`** — the scorecard above; every line is labeled
+  with what it is proof *of*. Deterministic offline, live with a key.
+
+All deterministic examples reproduce bit-for-bit (seeded traffic,
+content-derived sensors). `refund_triage` and `proof_of_outcomes` upgrade
+to the live model when `TYPESAFE_API_KEY` is configured; the certification,
+cascade, and recalibration flows are deliberately deterministic because
+certificates and scorecards must reproduce.
 
 ## Configuration — `.env` (live backend)
 
@@ -321,6 +439,12 @@ Nothing in the core knows about refunds or pull requests. A new use case is:
    or a list of conditions (all must hold). Children of unmatched parents come
    back `SKIPPED_DEPENDENCY` — reported, never silently dropped.
 
+Beyond single decisions, three promotion-and-operations workflows — model-swap
+certification, nightly recalibration, cascade routing — compose the stages
+into a system that decides what may be automated, with evidence. See
+[The examples — a guided tour](#the-examples--a-guided-tour) for what each
+proves and how to read it in the UI.
+
 ## Adapting to a new System 1 model (the backend seam)
 
 Implement two methods — that is the whole contract
@@ -401,6 +525,13 @@ class MyLocalKevDriver:
 
 ## Design-law notes (mechanical sympathy / semantic rigor / third door)
 
+> **Why is it built this way?** The full argument — the problem, the
+> sensor-not-oracle thesis, the five stages, and the derivations behind
+> every gate (temperature scaling, scale-invariant entropy, the conformal
+> rank theorem and its honest limits, AAD polarization, JS-divergence
+> debiasing, hash chaining) — is in
+> **[docs/DESIGN.md](docs/DESIGN.md)**.
+
 - **Pure Stage 4**: gates are functions of `(GateInputs, raw distribution)` —
   no I/O, clock, or RNG. Replay `wrong == 0` is a test, not an aspiration
   (`tests/test_replay.py`, randomized sweep included).
@@ -437,6 +568,11 @@ src/s1core/
     ├── systemone.py    hosted /v1/systemone HTTP transport (usage + retries)
     ├── typesafe.py     live TypeSafe/Jev wire adapter
     └── shadow.py       ShadowTeeDriver (distillation pattern)
+tools/ui/          local web UI (not packaged): app.py = stdlib server +
+                   JSON API over s1core; scenarios.py = example adapters;
+                   static/ = render-only single-page frontend
+docs/DESIGN.md     design rationale: the problem, the thesis, the
+                   mathematics behind every gate, the epistemology
 ```
 
 Source design doc: *System 1 Inference Model Harness* (S1-Core architecture:
