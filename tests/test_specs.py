@@ -159,5 +159,29 @@ class PolicyDefaults(unittest.TestCase):
         self.assertFalse(policy.debiased_permutation)
 
 
+class SpecEdgeValidationTests(unittest.TestCase):
+    def test_choice_rejects_empty_option_key(self):
+        spec = ChoiceSpec(
+            question_id="lane",
+            instructions="Which handling lane does this ticket belong in?",
+            options={
+                "": "Automated fast-track handling with no human contact needed.",
+                "slow": "Human agent reviews everything before any action is taken.",
+            },
+        )
+        with self.assertRaises(SpecError):
+            spec.compile()
+
+    def test_score_rejects_non_integer_rubric_keys(self):
+        spec = ScoreSpec(
+            question_id="urgency",
+            instructions="Rate the urgency of this ticket on the rubric provided.",
+            rubric_levels={"1": "Routine backlog with no customer impact.",
+                           "2": "Standard queue handling within the day."},
+        )
+        with self.assertRaises(SpecError):
+            spec.compile()
+
+
 if __name__ == "__main__":
     unittest.main()

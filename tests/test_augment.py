@@ -82,5 +82,37 @@ class CanonicalizationTests(unittest.TestCase):
         self.assertEqual(envelope["@deterministic_facts"], {})
 
 
+class ExtractorEdgeCaseTests(unittest.TestCase):
+    def test_explicit_keys_skip_unlisted_date_fields(self):
+        augmentor = Augmentor((IsoDateDeltaFacts(["deadline"]),))
+        envelope = augmentor.augment(
+            {"deadline": "2026-10-20", "created_date": "2026-01-01"},
+            datetime(2026, 10, 14, tzinfo=timezone.utc),
+        )
+        self.assertNotIn("created_date__days_from_reference",
+                         envelope["@deterministic_facts"])
+
+    def test_non_string_date_values_are_skipped(self):
+        augmentor = Augmentor((IsoDateDeltaFacts(),))
+        envelope = augmentor.augment(
+            {"created_at": 1760000000, "updated_at": ["not", "a", "date"]},
+            datetime(2026, 10, 14, tzinfo=timezone.utc),
+        )
+        self.assertEqual(envelope["@deterministic_facts"], {})
+
+    def test_non_numeric_ratio_inputs_are_skipped(self):
+        augmentor = Augmentor((RatioFacts("requested_refund", "order_total"),))
+        envelope = augmentor.augment(
+            {"requested_refund": "lots", "order_total": 120.0},
+            datetime(2026, 10, 14, tzinfo=timezone.utc),
+        )
+        self.assertEqual(envelope["@deterministic_facts"], {})
+
+    def test_naive_reference_time_treated_as_utc(self):
+        augmentor = Augmentor((IsoDateDeltaFacts(),))
+        envelope = augmentor.augment({"event_date": "2026-10-07"}, datetime(2026, 10, 14))
+        self.assertEqual(envelope["@deterministic_facts"]["event_date__days_from_reference"], -7)
+
+
 if __name__ == "__main__":
     unittest.main()

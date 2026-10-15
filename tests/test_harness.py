@@ -13,6 +13,7 @@ from s1core import (
     JsonlAuditLedger,
     NoulSpec,
     ScoreSpec,
+    SpecError,
     System1Harness,
     verify_chain,
 )
@@ -158,7 +159,7 @@ class HarnessTests(unittest.TestCase):
         harness = System1Harness(OrderSensitiveDriver({}))
         spec = lane_spec(GatePolicy(min_top1_prob=0.0, min_top2_margin=0.0,
                                     max_normalized_entropy=1.0, debiased_permutation=True,
-                                    max_permutation_divergence=5.0))
+                                    max_permutation_divergence=1.0))
         verdicts = harness.evaluate({}, [spec])
         v = verdicts["lane"]
         self.assertIsNotNone(v.permutation_divergence)
@@ -239,6 +240,22 @@ class HarnessTests(unittest.TestCase):
             tampered = [dict(records[0])]
             tampered[0] = {**tampered[0], "raw_probabilities": {"fast": 0.99, "slow": 0.01}}
             self.assertFalse(verify_chain(tampered + [records[1]]))
+
+
+class HarnessFailClosedTests(unittest.TestCase):
+    def test_non_serializable_state_raises_spec_error(self):
+        harness = System1Harness(ScriptedDriver({}))
+        with self.assertRaises(SpecError):
+            harness.evaluate({"bad": {1, 2, 3}}, [lane_spec()])
+
+    def test_backend_omitting_a_question_is_a_runtime_error(self):
+        class OmittingDriver(ScriptedDriver):
+            def score_branches(self, handle, batch):
+                return {}
+
+        harness = System1Harness(OmittingDriver({}))
+        with self.assertRaises(RuntimeError):
+            harness.evaluate({}, [lane_spec()])
 
 
 if __name__ == "__main__":

@@ -121,6 +121,32 @@ class ScoreGateTests(unittest.TestCase):
         self.assertAlmostEqual(verdict.raw_value, 1.5)
 
 
+class GateValidationTests(unittest.TestCase):
+    def test_entropy_of_degenerate_support_is_zero(self):
+        self.assertEqual(normalized_entropy({}), 0.0)
+        self.assertEqual(normalized_entropy({"a": 1.0}), 0.0)
+
+    def test_score_keys_must_be_integer_levels(self):
+        with self.assertRaises(ValueError):
+            evaluate(score_inputs(), {"low": 0.5, "high": 0.5}, "d" * 16)
+
+    def test_noul_edges_must_be_ordered(self):
+        gi = GateInputs("n", "noul", GatePolicy(), noul_true_edge=0.2, noul_false_edge=0.5)
+        with self.assertRaises(ValueError):
+            evaluate(gi, {"true": 0.9, "false": 0.1}, "d" * 16)
+
+    def test_unknown_primitive(self):
+        gi = GateInputs("q", "gossip", GatePolicy())
+        with self.assertRaises(ValueError):
+            evaluate(gi, {"a": 1.0}, "d" * 16)
+
+    def test_conformal_tau_must_be_a_probability(self):
+        policy = GatePolicy(min_top1_prob=0.0, min_top2_margin=0.0,
+                            max_normalized_entropy=1.0, conformal_tau=1.5)
+        with self.assertRaises(ValueError):
+            evaluate(choice_inputs(policy), {"a": 0.9, "b": 0.1}, "d" * 16)
+
+
 class NoulGateTests(unittest.TestCase):
     def noul(self, p, **policy_kwargs):
         gi = GateInputs(

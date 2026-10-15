@@ -1,22 +1,49 @@
-"""Temperature fitting and split-conformal probability-threshold (LAC) sets.
+"""Post-hoc auto-calibration (design pattern #4: shadow-traffic distillation).
 
-Coverage is marginal on exchangeable held-out data, not conditional accuracy
-of the subset admitted by the harness. Temperature fitting and conformal
-calibration must use disjoint data. ECE is a diagnostic, not a guarantee.
+Pure, dependency-free statistics over ledger-derived samples:
+
+- :func:`fit_temperature` — per-domain temperature ``T_d`` minimizing mean
+  negative log-likelihood via golden-section search (NLL is unimodal in the
+  temperature: exact 1-D optimum, no gradient machinery).
+- :func:`conformal_tau` — split-conformal probability-threshold (LAC) set:
+  the finite-sample ``floor((n+1) * alpha)`` rank order statistic of the
+  true-class scores, so ``P(p_true >= tau) >= 1 - alpha`` on exchangeable
+  held-out data (rank 0 -> ``tau = 0``, the full support).
+- :func:`expected_calibration_error` — binned ECE, the fitness *diagnostic*
+  these fits are judged by; a diagnostic, not a guarantee.
+- :func:`fit_gate_policy` — a :class:`GatePolicy` with ``temperature`` and
+  ``conformal_tau`` fitted from labeled samples, on disjoint data splits.
+
+What calibration does *not* promise: coverage is marginal on exchangeable
+held-out data, not conditional accuracy of the subset the harness admits.
+Temperature fitting and conformal calibration must see disjoint samples;
+dataset shift and selection effects require separate evaluation. Labels come
+from production ground truth or a strong System 2 judge; nothing here is
+task-specific.
 """
+
 from __future__ import annotations
 
 import math
 from dataclasses import replace
 from typing import Mapping, Sequence
+
 from .gates import PROB_FLOOR, normalize, temperature_scale
 from .types import GatePolicy
 
+# (raw distribution, key of the outcome that turned out to be correct)
 Sample = tuple[Mapping[str, float], str]
 
 
-def fit_temperature(samples: Sequence[Sample], *, lo=0.05, hi=20.0, iterations=100) -> float:
-    """Minimize held-in mean NLL over a bounded positive temperature interval."""
+def fit_temperature(samples: Sequence[Sample], *, lo: float = 0.05, hi: float = 20.0,
+                    iterations: int = 100) -> float:
+    """Golden-section search for the temperature minimizing mean NLL.
+
+    NLL as a function of temperature is unimodal on ``(0, inf)`` for any
+    fixed sample set, so golden section converges to the exact optimum
+    without gradient machinery. Bounds must satisfy ``0 < lo < hi``; every
+    sample's label must appear in its distribution.
+    """
     if not samples:
         raise ValueError("fit_temperature requires at least one sample")
     if not (math.isfinite(lo) and math.isfinite(hi) and 0.0 < lo < hi) or iterations < 1:
@@ -43,10 +70,15 @@ def fit_temperature(samples: Sequence[Sample], *, lo=0.05, hi=20.0, iterations=1
 
 
 def conformal_tau(calibration_scores: Sequence[float], alpha: float) -> float:
-    """Lower-tail finite-sample threshold for sets {i: p_i >= tau}.
+    """Lower-tail finite-sample threshold for sets ``{i : p_i >= tau}``.
 
-    Use floor((n+1)*alpha), with tau=0 when the rank is zero. This is
-    equivalent to the usual upper quantile of nonconformity 1-p_true.
+    ``calibration_scores`` are the probabilities the (already
+    temperature-scaled) model assigned to the true outcome on a held-out
+    calibration set. The rank is ``floor((n+1) * alpha)`` into the ascending
+    scores — tau 0 when the rank is zero — which is the usual upper quantile
+    of the nonconformity scores ``1 - p_true``: on exchangeable data the
+    true-class score falls below tau at most ``alpha`` of the time, so the
+    prediction set covers with probability at least ``1 - alpha``.
     """
     if not calibration_scores or not math.isfinite(alpha) or not 0.0 < alpha < 1.0:
         raise ValueError("require scores and 0 < alpha < 1")
@@ -56,7 +88,13 @@ def conformal_tau(calibration_scores: Sequence[float], alpha: float) -> float:
     return 0.0 if rank == 0 else sorted(calibration_scores)[rank - 1]
 
 
-def expected_calibration_error(samples: Sequence[Sample], *, bins=15) -> float:
+def expected_calibration_error(samples: Sequence[Sample], *, bins: int = 15) -> float:
+    """Binned ECE over top-1 confidence vs top-1 accuracy.
+
+    Sums the per-bin absolute confidence/accuracy gap weighted by nothing but
+    accumulated counts; returns the unweighted mean per-sample gap. A fitness
+    diagnostic for the fits above, never a guarantee.
+    """
     if not samples or not isinstance(bins, int) or bins < 1:
         raise ValueError("require samples and a positive integer bin count")
     counts, confidence, accuracy = [0] * bins, [0.0] * bins, [0.0] * bins
@@ -72,13 +110,15 @@ def expected_calibration_error(samples: Sequence[Sample], *, bins=15) -> float:
     return sum(abs(confidence[i] - accuracy[i]) for i in range(bins)) / len(samples)
 
 
-def fit_gate_policy(samples: Sequence[Sample], *, alpha=0.10, base=None,
+def fit_gate_policy(samples: Sequence[Sample], *, alpha: float = 0.10, base: GatePolicy | None = None,
                     calibration_samples: Sequence[Sample] | None = None) -> GatePolicy:
-    """Fit on samples, calibrate on disjoint calibration_samples.
+    """Fit temperature (min NLL), then conformal tau (at risk ``alpha``).
 
-    If calibration_samples is omitted, split samples in half without shuffling:
-    first half for temperature, second half for conformal calibration. Supply
-    representative exchangeable data; this helper does not cure dataset shift.
+    Calibration law: the two fits must see disjoint data. Pass held-out
+    ``calibration_samples`` explicitly, or the helper splits ``samples`` in
+    half without shuffling — first half for temperature, second half for
+    conformal calibration. Supply representative exchangeable data; this
+    helper does not cure dataset shift.
     """
     if calibration_samples is None:
         if len(samples) < 2:
@@ -98,4 +138,11 @@ def fit_gate_policy(samples: Sequence[Sample], *, alpha=0.10, base=None,
         scores.append(scaled[correct])
     return replace(base or GatePolicy(), temperature=temperature, conformal_tau=conformal_tau(scores, alpha))
 
-__all__ = ["Sample", "fit_temperature", "conformal_tau", "expected_calibration_error", "fit_gate_policy"]
+
+__all__ = [
+    "Sample",
+    "fit_temperature",
+    "conformal_tau",
+    "expected_calibration_error",
+    "fit_gate_policy",
+]

@@ -137,5 +137,45 @@ class ReplayTests(unittest.TestCase):
             self.assertEqual(replayed.replay_digest, stored.replay_digest)
 
 
+class ReplayEventValidationTests(unittest.TestCase):
+    """Post-gate events recorded in v2 records must be coherent with the gate."""
+
+    def setUp(self):
+        _, self.records = ReplayTests(
+            "test_every_record_replays_exactly"
+        ).build_records()
+
+    def ratified_record(self):
+        return next(
+            dict(r.to_jsonable()) for r in self.records
+            if r.raw_probabilities
+            and DecisionVerdict.from_jsonable(r.verdict).status is EpistemicStatus.RATIFIED
+        )
+
+    def test_unsupported_schema_version(self):
+        record = self.ratified_record()
+        record["schema_version"] = "s1core.audit/3"
+        with self.assertRaises(ValueError):
+            replay_verdict(record)
+
+    def test_impossible_recorded_divergence(self):
+        for divergence in (1.5, -0.5, float("nan")):
+            with self.subTest(divergence=divergence):
+                record = self.ratified_record()
+                record["postprocessing"] = {
+                    "permutation_divergence": divergence, "loop_guard_tripped": False,
+                }
+                with self.assertRaises(ValueError):
+                    replay_verdict(record)
+
+    def test_loop_guard_event_requires_an_abstained_gate_result(self):
+        record = self.ratified_record()
+        record["postprocessing"] = {
+            "permutation_divergence": None, "loop_guard_tripped": True,
+        }
+        with self.assertRaises(ValueError):
+            replay_verdict(record)
+
+
 if __name__ == "__main__":
     unittest.main()

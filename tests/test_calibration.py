@@ -95,5 +95,46 @@ class FitGatePolicyTests(unittest.TestCase):
         self.assertLessEqual(policy.conformal_tau, 1.0)
 
 
+class CalibrationValidationTests(unittest.TestCase):
+    SAMPLE = ({"a": 0.9, "b": 0.1}, "a")
+
+    def test_fit_temperature_rejects_bad_bounds_or_samples(self):
+        for kwargs, samples in (
+            ({"lo": 0.0}, [self.SAMPLE]),
+            ({"hi": 0.01}, [self.SAMPLE]),
+            ({"iterations": 0}, [self.SAMPLE]),
+            ({}, []),
+            ({}, [(self.SAMPLE[0], "missing")]),
+        ):
+            with self.subTest(kwargs=kwargs, samples=samples), self.assertRaises(ValueError):
+                fit_temperature(samples, **kwargs)
+
+    def test_conformal_tau_rejects_bad_alpha_or_scores(self):
+        for scores, alpha in ([], 0.1), ([0.5], 0.0), ([0.5], 1.0), ([0.5], math.nan):
+            with self.subTest(scores=scores, alpha=alpha), self.assertRaises(ValueError):
+                conformal_tau(scores, alpha)
+        for scores in ([0.5, math.nan], [0.5, 1.5]):
+            with self.subTest(scores=scores), self.assertRaises(ValueError):
+                conformal_tau(scores, 0.1)
+
+    def test_ece_rejects_bad_bins_or_labels(self):
+        with self.assertRaises(ValueError):
+            expected_calibration_error([])
+        for bins in (0, 2.5):
+            with self.subTest(bins=bins), self.assertRaises(ValueError):
+                expected_calibration_error([self.SAMPLE], bins=bins)
+        with self.assertRaises(ValueError):
+            expected_calibration_error([(self.SAMPLE[0], "missing")])
+
+    def test_fit_gate_policy_rejects_degenerate_inputs(self):
+        with self.assertRaises(ValueError):  # auto-split needs >= 2 samples
+            fit_gate_policy([self.SAMPLE])
+        with self.assertRaises(ValueError):  # explicit but empty calibration set
+            fit_gate_policy([self.SAMPLE], calibration_samples=[])
+        with self.assertRaises(ValueError):  # label missing from calibration distribution
+            fit_gate_policy([self.SAMPLE],
+                            calibration_samples=[(self.SAMPLE[0], "missing")])
+
+
 if __name__ == "__main__":
     unittest.main()

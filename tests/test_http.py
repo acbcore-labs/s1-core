@@ -11,6 +11,15 @@ from s1core.backends import BackendError, SystemOneHTTPDriver
 
 class FakeSystemOneHandler(BaseHTTPRequestHandler):
     captured: list[dict] = []
+    flaky_calls = 0
+
+    def _send_json(self, status: int, payload: dict):
+        response = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(response)))
+        self.end_headers()
+        self.wfile.write(response)
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))
@@ -21,6 +30,11 @@ class FakeSystemOneHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b'{"error": "internal"}')
             return
+        if body.get("model") == "flaky":
+            FakeSystemOneHandler.flaky_calls += 1
+            if FakeSystemOneHandler.flaky_calls == 1:
+                self._send_json(429, {"error": "rate limited"})
+                return
         decisions = {}
         for question in body["questions"]:
             if question["type"] == "noul":
@@ -30,12 +44,10 @@ class FakeSystemOneHandler(BaseHTTPRequestHandler):
                     key: 0.9 if key == "fast" else 0.1 / max(len(question["criteria"]) - 1, 1)
                     for key in question["criteria"]
                 }
-        response = json.dumps({"decisions": decisions}).encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(response)))
-        self.end_headers()
-        self.wfile.write(response)
+        response: dict = {"decisions": decisions}
+        if body.get("model") == "metered":
+            response["usage"] = {"input_tokens": 42, "output_tokens": 7}
+        self._send_json(200, response)
 
     def log_message(self, *args):  # silence test output
         pass
@@ -107,6 +119,57 @@ class SystemOneHTTPDriverTests(unittest.TestCase):
         )
         with self.assertRaises(BackendError):
             harness.evaluate({}, [spec])
+
+
+    def test_usage_totals_accumulate(self):
+        driver = SystemOneHTTPDriver(self.base_url, model_id="metered")
+        System1Harness(driver).evaluate({}, [lane_choice()])
+        self.assertEqual(
+            driver.usage_totals, {"requests": 1, "input_tokens": 42, "output_tokens": 7}
+        )
+
+    def test_retryable_status_is_retried_then_succeeds(self):
+        FakeSystemOneHandler.flaky_calls = 0
+        driver = SystemOneHTTPDriver(self.base_url, model_id="flaky",
+                                     max_retries=2, retry_backoff_s=0.0)
+        verdicts = System1Harness(driver).evaluate({}, [lane_choice()])
+        self.assertEqual(verdicts["lane"].value, "fast")
+        self.assertEqual(FakeSystemOneHandler.flaky_calls, 2)
+
+    def test_transport_failure_retries_then_raises(self):
+        # Port 9 on localhost refuses connections: pure URLError transport path.
+        driver = SystemOneHTTPDriver("http://127.0.0.1:9", max_retries=1,
+                                     retry_backoff_s=0.0)
+        with driver.pin_state({"s": 1}, "hash") as handle:
+            with self.assertRaises(BackendError):
+                driver.score_branches(handle, {"lane": lane_choice().compile()})
+
+    def test_degenerate_retry_budget_still_fails_closed(self):
+        # max_retries < 0 makes the attempt loop empty; the driver must raise,
+        # never fall through with a missing result.
+        driver = SystemOneHTTPDriver(self.base_url, model_id="metered", max_retries=-1)
+        with driver.pin_state({"s": 1}, "hash") as handle:
+            with self.assertRaises(BackendError):
+                driver.score_branches(handle, {"lane": lane_choice().compile()})
+
+
+class DefaultResponseParserTests(unittest.TestCase):
+    def test_missing_question_is_a_backend_error(self):
+        from s1core.backends.systemone import default_response_parser
+
+        with self.assertRaises(BackendError):
+            default_response_parser({"decisions": {}}, {"lane": {}})
+
+
+def lane_choice():
+    return ChoiceSpec(
+        question_id="lane",
+        instructions="Which handling lane does this ticket belong in?",
+        options={
+            "fast": "Automated fast-track handling with no human contact needed.",
+            "slow": "Human agent reviews everything before any action is taken.",
+        },
+    )
 
 
 if __name__ == "__main__":

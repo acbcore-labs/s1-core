@@ -1,13 +1,26 @@
-"""Deterministic rules and a probability-product heuristic over ratified inputs.
+"""Deterministic combiners (design pattern #1: multi-signal orthogonal
+decomposition).
 
-Ratification here means the computation had admissible inputs, not that its
-output is true or exceeds an application action threshold. Products require
-independence to represent joint probabilities; shared-state signals may not.
+A single broad question ("Should this PR be merged safely?") frequently loses
+to a small reasoning LLM, but 5–8 narrow orthogonal signals cost ~1.03x the
+tokens of one question and — combined here in plain deterministic code — match
+or beat System 2 at a fraction of the latency.
+
+Two laws keep the combiners honest:
+
+- **Fail-closed**: if any required signal is not RATIFIED, the combined
+  decision is ``ABSTAINED_GATE`` with no value, never a guess.
+- **Ratification ≠ truth**: a ratified signal means the computation had
+  admissible inputs, not that its output is true or exceeds an application
+  action threshold. Probability products require independence to represent
+  joint probabilities; shared-state signals may not.
 """
+
 from __future__ import annotations
 
 import math
 from typing import Callable, Mapping, Sequence
+
 from .types import DecisionVerdict, EpistemicStatus
 
 
@@ -21,9 +34,11 @@ def _fail_closed(name: str) -> DecisionVerdict:
 
 
 def signal_probability(verdict: DecisionVerdict) -> float:
-    """Selected-label model probability, not an independent correctness proof.
+    """Model probability that a ratified signal's *selected label* is correct.
 
-    Score expectations and combined scalars have no selected-label probability.
+    A score expectation or an already-combined scalar is not a categorical
+    outcome and has no selected-label probability — asking for one is a code
+    defect (:class:`CombinerError`), not a zero.
     """
     if verdict.status is not EpistemicStatus.RATIFIED:
         return 0.0
@@ -42,11 +57,14 @@ def signal_probability(verdict: DecisionVerdict) -> float:
 
 
 class LatticeCombiner:
-    """Apply a Boolean rule to ratified inputs; confidence is a heuristic minimum.
+    """Boolean lattice over ratified signal values, evaluated in plain code.
 
-    Numeric score inputs are permitted in the rule. The confidence field is
-    the minimum input confidence, not a calibrated probability of the rule.
+    ``rule`` receives the verdict mapping and returns the combined boolean;
+    numeric score values may be compared inside it. The resulting confidence
+    field is the *minimum input confidence* — a routing heuristic, not a
+    calibrated probability of the rule.
     """
+
     def __init__(self, name: str, required: Sequence[str],
                  rule: Callable[[Mapping[str, DecisionVerdict]], bool]):
         if not required or len(set(required)) != len(required):
@@ -58,7 +76,7 @@ class LatticeCombiner:
             return _fail_closed(self.name)
         try:
             outcome = bool(self._rule(verdicts))
-        except Exception as exc:
+        except Exception as exc:  # deterministic user code must not fabricate decisions
             raise CombinerError(f"combiner '{self.name}' rule raised: {exc}") from exc
         return DecisionVerdict(f"combined:{self.name}", EpistemicStatus.RATIFIED,
             outcome, outcome, probabilities={},
@@ -68,12 +86,16 @@ class LatticeCombiner:
 
 
 class NoisyANDCombiner:
-    """Product of selected-label probabilities; not a truth/action threshold.
+    """Probability that all required selected labels hold, as ``prod(p_i)``.
 
-    A ratified False noul contributes p(false), not p(true): the product refers
-    to the selected labels. Only independent events justify a joint-probability
-    interpretation. Applications must apply their own action threshold.
+    Useful as a soft pre-gate: a low product routes to a System 2 reviewer
+    instead of accepting the decomposed decision. A ratified False noul
+    contributes ``p(false)``, not ``p(true)`` — the product refers to the
+    selected labels, so only independent events justify reading it as a joint
+    probability. The value is a scalar for the application to threshold;
+    the harness does not impose an action threshold.
     """
+
     def __init__(self, name: str, required: Sequence[str]):
         if not required or len(set(required)) != len(required):
             raise ValueError("required signals must be nonempty and unique")

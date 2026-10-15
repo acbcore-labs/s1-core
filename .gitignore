@@ -9,3 +9,6 @@ __pycache__/
 
 # Local example artifacts (audit ledgers are per-run)
 examples/*_audit.jsonl
+
+# Coverage artifacts
+.coverage

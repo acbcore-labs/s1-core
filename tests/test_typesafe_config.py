@@ -143,5 +143,46 @@ class DotEnvTests(unittest.TestCase):
         self.assertEqual(driver.endpoint, "/v1/systemone")
 
 
+class TypeSafeParserValidationTests(unittest.TestCase):
+    def test_missing_answers_map(self):
+        from s1core.backends import BackendError
+
+        with self.assertRaises(BackendError):
+            typesafe_response_parser({"unexpected": True}, compiled_batch())
+
+    def test_score_level_count_mismatch(self):
+        from s1core.backends import BackendError
+
+        batch = {"urgency": compiled_batch()["urgency"]}
+        body = {"answers": {"urgency": {"type": "score",
+                                        "probabilities": {"0": 0.5, "1": 0.5}}}}
+        with self.assertRaises(BackendError):
+            typesafe_response_parser(body, batch)
+
+    def test_unknown_answer_type(self):
+        from s1core.backends import BackendError
+
+        batch = {"lane": compiled_batch()["lane"]}
+        body = {"answers": {"lane": {"type": "gossip", "probabilities": {"fast": 1.0}}}}
+        with self.assertRaises(BackendError):
+            typesafe_response_parser(body, batch)
+
+
+class DotEnvEdgeCaseTests(unittest.TestCase):
+    def test_missing_file_is_empty(self):
+        self.assertEqual(load_dotenv("/nonexistent/path/.env"), {})
+
+    def test_lines_without_keys_are_skipped(self):
+        import tempfile
+
+        with tempfile.NamedTemporaryFile("w", suffix=".env", delete=False) as fh:
+            fh.write("=value\n")
+            path = fh.name
+        try:
+            self.assertEqual(load_dotenv(path), {})
+        finally:
+            os.unlink(path)
+
+
 if __name__ == "__main__":
     unittest.main()

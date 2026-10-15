@@ -3,6 +3,7 @@
 import unittest
 
 from s1core import (
+    CombinerError,
     DecisionVerdict,
     EpistemicStatus,
     LatticeCombiner,
@@ -89,6 +90,31 @@ class NoisyANDTests(unittest.TestCase):
             }
         )
         self.assertAlmostEqual(combined.value, 0.4)
+
+
+class SignalProbabilityValidationTests(unittest.TestCase):
+    def test_value_missing_from_probabilities_is_a_defect(self):
+        v = verdict("ghost", probabilities={"a": 0.9, "b": 0.1})
+        with self.assertRaises(CombinerError):
+            signal_probability(v)
+
+    def test_out_of_range_probability_is_a_defect(self):
+        for bad in (float("nan"), 1.5):
+            with self.subTest(p=bad), self.assertRaises(CombinerError):
+                signal_probability(verdict("ghost", probabilities={"ghost": bad}))
+
+
+class NoisyANDFailClosedTests(unittest.TestCase):
+    def test_missing_signal_fails_closed(self):
+        combined = NoisyANDCombiner("and", ["a", "b"]).combine({"a": verdict(True)})
+        self.assertEqual(combined.status, EpistemicStatus.ABSTAINED_GATE)
+        self.assertIsNone(combined.value)
+
+    def test_unratified_signal_fails_closed(self):
+        combined = NoisyANDCombiner("and", ["a"]).combine(
+            {"a": verdict(None, status=EpistemicStatus.ABSTAINED_MODEL)}
+        )
+        self.assertEqual(combined.status, EpistemicStatus.ABSTAINED_GATE)
 
 
 if __name__ == "__main__":
