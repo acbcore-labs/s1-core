@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>S1-Core — decision harness UI</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230d1117'/%3E%3Ccircle cx='16' cy='16' r='9' fill='none' stroke='%233fb950' stroke-width='2.5'/%3E%3Ccircle cx='16' cy='16' r='3.5' fill='%2358a6ff'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="#/">
+    <span class="brand-mark"></span>
+    <span class="brand-name">S1-Core</span>
+    <span class="brand-sub">decision harness UI</span>
+  </a>
+  <div class="topbar-status" id="backend-badge" title="backend in use">…</div>
+  <nav class="topbar-nav">
+    <a href="#/" data-nav="home">Home</a>
+    <a href="#/composer" data-nav="composer">Composer</a>
+  </nav>
+</header>
+
+<main id="app" class="container">
+  <div class="loading">connecting…</div>
+</main>
+
+<template id="drawer-template"></template>
+<div id="drawer-root"></div>
+
+<footer class="footer">
+  RATIFIED means a policy passed — not that an answer is correct.
+  The harness owns admissibility; your code owns permission.
+  <span class="footer-dim" id="footer-meta"></span>
+</footer>
+
+<script type="module" src="/static/app.js"></script>
+</body>
+</html>
