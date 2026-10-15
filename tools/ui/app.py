@@ -481,13 +481,13 @@ def make_handler(app: UiApp) -> type[BaseHTTPRequestHandler]:
                 elif path.startswith("/static/"):
                     self._serve_static(path[len("/static/"):])
                 elif path == "/api/state":
-                    live, _toy = scenarios_backend("live")
+                    live, toy = scenarios.backends()
                     self._json(200, {
                         "version": s1core.__version__,
                         "schema_version": SCHEMA_VERSION,
                         "backend": {
                             "kind": "live" if live else "toy",
-                            "model_id": (live or scenarios_backend("toy")[0]).model_id,
+                            "model_id": (live or toy).model_id,
                         },
                         "key_present": live is not None,
                     })
