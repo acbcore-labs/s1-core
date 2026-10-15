@@ -5,17 +5,19 @@ on:
 permissions:
   contents: read
 jobs:
-  unittest:
+  test:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v10
         with:
-          python-version: '3.14'
-      - name: Run offline tests
-        env:
-          PYTHONPATH: src
-        run: python -m unittest discover -s tests -v
+          enable-cache: true
+      - name: Install Python 3.14 (managed fallback when no system interpreter matches)
+        run: uv python install 3.14
+      - name: Core stdlib suite (zero-dependency proof)
+        run: uv run --no-group dev python -m unittest discover -s tests
+      - name: Full suite under the 100% coverage gate
+        run: uv run pytest

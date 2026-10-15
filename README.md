@@ -103,18 +103,28 @@ expectation `s^`, gated on mode dispersion), `noul` (binary proposition →
 
 ## Installation & tests
 
+**With [uv](https://docs.astral.sh/uv/) (recommended):**
+
 ```bash
-pip install -e .                       # or just: PYTHONPATH=src
-PYTHONPATH=src python3 -m unittest discover -s tests   # 136 tests, offline
-python3 examples/refund_triage.py
-python3 examples/orthogonal_pr_gate.py
-python3 examples/calibrate_from_ledger.py
-python3 examples/proof_of_outcomes.py   # live scorecard when a key is configured
+brew install uv                # or: curl -LsSf https://astral.sh/uv/install.sh | sh
+uv sync                        # .venv + editable s1core + dev tools, per uv.lock
+uv run pytest                  # 136 tests + enforced 100% coverage gate
+uv run python examples/refund_triage.py
+uv run python examples/orthogonal_pr_gate.py
+uv run python examples/calibrate_from_ledger.py
+uv run python examples/proof_of_outcomes.py   # live scorecard when a key is configured
 ```
 
-CI runs the same offline suite on Python 3.14 (`.github/workflows/tests.yml`)
-— no API keys, no network. The suite also pins **100% line coverage** and a
-randomized `wrong == 0` replay sweep.
+**Without uv — the zero-dependency path (stdlib only):**
+
+```bash
+PYTHONPATH=src python3 -m unittest discover -s tests   # 136 tests, offline
+```
+
+CI (`.github/workflows/tests.yml`) runs both paths on Python 3.14 via
+`astral-sh/setup-uv`: the stdlib-only core suite, then the full suite under
+the enforced 100% line-coverage gate — no API keys, with the randomized
+`wrong == 0` replay sweep riding along in both.
 
 ## Configuration — `.env` (live backend)
 

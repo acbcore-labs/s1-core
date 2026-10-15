@@ -13,8 +13,24 @@ requires-python = ">=3.14"
 authors = [{ name = "acbcore-labs" }]
 dependencies = []
 
-[project.optional-dependencies]
-dev = ["pytest>=8"]
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-cov>=7",
+]
+
+[tool.uv]
+# Prefer Homebrew/system interpreters; download a managed Python only if no
+# system interpreter satisfies requires-python.
+python-preference = "system"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/s1core"]
+
+[tool.pytest.ini_options]
+addopts = "--cov=src/s1core --cov-report=term-missing"
+
+[tool.coverage.report]
+precision = 2
+fail_under = 100
+show_missing = true
