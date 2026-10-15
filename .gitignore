@@ -12,3 +12,6 @@ examples/*_audit.jsonl
 
 # Coverage artifacts
 .coverage
+
+# Local agent/session tooling state
+.zcode/
