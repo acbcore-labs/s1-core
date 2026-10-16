@@ -286,7 +286,17 @@ such as `jev-latest` is an alias, not an immutable revision) — and a v3
 replay digest that covers the full effective gate inputs, so two
 configurations differing in any acceptance behavior (noul edges included,
 which the legacy policy-only digest missed) can never share a replay
-address. v1/v2 records replay under the historical algorithm and semantics.
+address. Replay keeps two failure classes distinct: record-internal
+incoherence raises — an unknown schema, support metadata that disagrees
+with the compiled question (enforced on dependency skips and short
+circuits too: a skipped question has no distribution to validate, but its
+gate metadata must still agree), a stored replay address that does not
+match the record's own content, or a contradictory short-circuit event
+(the flag is validated whenever it is present; `True` requires an empty
+raw distribution and the full short-circuit shape). Gate drift — a
+recomputed verdict that differs from the stored one — is returned for the
+caller to compare and count. v1/v2 records replay under the historical
+algorithm and semantics.
 
 Why blake2b and not blake3: identical content-addressing semantics, zero
 dependencies. The chain is for integrity of decision records, not
@@ -388,7 +398,7 @@ says go."
 
 ---
 
-*Everything asserted here is executable: `uv run pytest` (176 tests, 100%
+*Everything asserted here is executable: `uv run pytest` (181 tests, 100%
 coverage gate) or `PYTHONPATH=src python3 -m unittest discover -s tests`
 on the stdlib path. Claims require re-derivable evidence; the test suite
 is where this document goes to be checked.*

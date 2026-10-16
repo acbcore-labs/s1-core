@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.14%2B-blue.svg)](https://www.python.org/)
 [![Dependencies](https://img.shields.io/badge/dependencies-zero-brightgreen.svg)]()
-[![Tests](https://img.shields.io/badge/tests-176%20passing-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-181%20passing-brightgreen.svg)]()
 
 **S1-Core is a Python harness for System 1 inference models** (decision
 models like TypeSafe's Jev): models that classify, score, and gate in a
@@ -113,7 +113,7 @@ expectation `s^`, gated on mode dispersion), `noul` (binary proposition →
 ```bash
 brew install uv                # or: curl -LsSf https://astral.sh/uv/install.sh | sh
 uv sync                        # .venv + editable s1core + dev tools, per uv.lock
-uv run pytest                  # 176 tests + enforced 100% coverage gate
+uv run pytest                  # 181 tests + enforced 100% coverage gate
 uv run python examples/refund_triage.py
 uv run python examples/orthogonal_pr_gate.py
 uv run python examples/calibrate_from_ledger.py
@@ -126,7 +126,7 @@ uv run python examples/proof_of_outcomes.py   # live scorecard when a key is con
 **Without uv — the zero-dependency path (stdlib only):**
 
 ```bash
-PYTHONPATH=src python3 -m unittest discover -s tests   # 176 tests, offline
+PYTHONPATH=src python3 -m unittest discover -s tests   # 181 tests, offline
 ```
 
 CI (`.github/workflows/tests.yml`) runs both paths on Python 3.14 via
@@ -321,10 +321,13 @@ marketing honest:
   (the *(task prose, sensor)* identity used to group calibration samples —
   not a complete decision-policy identity). Replay reapplies gates and these
   events — not inference, and not the hidden stream history. v3 replays
-  enforce the declared output space; v1/v2 ledgers keep historical semantics
-  and the legacy digest algorithm. Gate-code changes can change old replay
-  results; retain the code revision for long-term bit-identical replay.
-  Verify the chain separately.
+  enforce the declared output space on every record — dependency skips and
+  short circuits included — re-derive the record's replay address, and
+  validate the short-circuit event whenever it is present; record
+  incoherence raises, while gate drift is returned for the caller to count.
+  v1/v2 ledgers keep historical semantics and the legacy digest algorithm.
+  Gate-code changes can change old replay results; retain the code revision
+  for long-term bit-identical replay. Verify the chain separately.
 - **Operations**: one harness per stream, not concurrently. The loop guard
   counts consecutive abstaining *question verdicts* across calls; other
   evaluated statuses reset the counter and dependency skips do not advance

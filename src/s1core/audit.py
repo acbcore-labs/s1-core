@@ -173,7 +173,10 @@ def _require_declared_support(gi: GateInputs, compiled_question: Mapping[str, An
 
     Absent metadata is the v1/v2 ledger tolerance, never a v3 bypass: a v3
     record whose gate inputs do not restate exactly the support the compiled
-    question declares is malformed and raises.
+    question declares is malformed and raises. Applied to every v3 record —
+    inference, dependency skip, and short circuit alike: a skipped question
+    has no distribution to validate, but its gate metadata must still agree
+    with the compiled question.
     """
     criteria = compiled_question.get("criteria") or {}
     if gi.primitive == "choice":
@@ -185,15 +188,15 @@ def _require_declared_support(gi: GateInputs, compiled_question: Mapping[str, An
 
 
 def _validate_short_circuit_record(record: Mapping[str, Any], stored: DecisionVerdict) -> None:
-    """Shape-law for a v3 loop-guard short-circuit record.
+    """Shape-law for a loop-guard short-circuit record.
 
-    Sole caller: :func:`replay_verdict`, which routes here only when the
-    record carries the ``loop_guard_short_circuit`` event — that routing is
-    the claim's establishment. The stored shape must then say exactly what
-    the claim means: the question never reached the backend. Replay
-    reconstructs the recorded short-circuit decision; it does not
-    independently prove that the hidden stream history justified the trip —
-    the same limitation as the loop-counter history itself.
+    Sole caller: :func:`replay_verdict`, which routes here only after the
+    claim is established — the ``loop_guard_short_circuit`` flag is a boolean
+    ``True`` and the record carries no raw distribution. The stored shape
+    must then say exactly what the claim means: the question never reached
+    the backend. Replay reconstructs the recorded short-circuit decision; it
+    does not independently prove that the hidden stream history justified
+    the trip — the same limitation as the loop-counter history itself.
     """
     events = record.get("postprocessing") or {}
     if stored.status is not EpistemicStatus.LOOP_GUARD_TRIPPED:
@@ -214,30 +217,58 @@ def replay_verdict(record: Mapping[str, Any]) -> DecisionVerdict:
     does not, the gate implementation drifted or the record's events are
     incoherent with the gate result, and that mismatch raises.
 
+    Two failure classes stay distinct (Semantic Rigor): record-internal
+    incoherence — an unknown schema, disagreeing support metadata, a replay
+    address that does not match the record's content, contradictory events —
+    raises here, because the record itself is malformed; gate drift — a
+    recomputed verdict that differs from the stored one — is returned, and
+    the caller compares fields and counts.
+
     Schema law: the schema is recognized **before** any early return, so an
     unknown schema can never slip through on an empty distribution. v2+
     records carry an explicit ``postprocessing`` map whose events are
     validated (divergence finite in [0, 1]; a loop-guard event may only
     overwrite an already-abstained gate result). Legacy v1 records lack the
     map, so its events are inferred from the stored verdict's telemetry.
-    v3 records additionally restate the declared output space in their gate
-    inputs (:func:`_require_declared_support`) and replay under the v3 digest
-    (:func:`compute_replay_digest_v3`); v1/v2 records keep the historical
-    digest algorithm and skip declared-support validation — historical
-    semantics, preserved byte-for-byte. Records without a raw distribution
-    may only be dependency skips, or v3 loop-guard short circuits
-    (:func:`_validate_short_circuit_record`). No format proves the hidden
-    loop-counter history.
+    v3 records restate the declared output space in their gate inputs
+    (:func:`_require_declared_support`) — enforced on dependency skips and
+    short circuits too, since a skipped question has no distribution to
+    validate but its gate metadata must still agree with the compiled
+    question — and every v3 record's replay address is re-derived and
+    checked against the stored verdict (:func:`compute_replay_digest_v3`).
+    v1/v2 records keep the historical digest algorithm and skip
+    declared-support validation — historical semantics, preserved
+    byte-for-byte. The short-circuit event is validated whenever it is
+    present, regardless of what else the record carries: the flag must be a
+    boolean, ``True`` requires an empty raw distribution (a short-circuited
+    question never reached the backend) plus the full short-circuit shape
+    (:func:`_validate_short_circuit_record`). Records without a raw
+    distribution may only be dependency skips, or short circuits. No format
+    proves the hidden loop-counter history.
     """
     raw = record.get("raw_probabilities") or {}
     stored = DecisionVerdict.from_jsonable(record["verdict"])
     schema = record.get("schema_version", "s1core.audit/1")
     if schema != SCHEMA_VERSION and schema not in _LEGACY_SCHEMAS:
         raise ValueError("unsupported audit schema")
-    short_circuit = (
-        schema == SCHEMA_VERSION
-        and (record.get("postprocessing") or {}).get("loop_guard_short_circuit", False)
-    )
+    events = record.get("postprocessing") or {}
+    short_circuit = events.get("loop_guard_short_circuit")
+    if short_circuit is not None and not isinstance(short_circuit, bool):
+        raise ValueError("loop_guard_short_circuit must be a boolean")
+    if short_circuit and raw:
+        raise ValueError("a short-circuited record must carry no raw distribution: "
+                         "the question never reached the backend")
+    gi = GateInputs.from_jsonable(record["gate_inputs"])
+    if schema == SCHEMA_VERSION:
+        _require_declared_support(gi, record["compiled_question"])
+        digest = compute_replay_digest_v3(
+            record["state_hash"], record["compiled_question"], record["model_id"], gi)
+        if stored.replay_digest != digest:
+            raise ValueError("v3 replay address mismatch: the stored verdict "
+                             "does not address this record's content")
+    else:
+        digest = compute_replay_digest(
+            record["state_hash"], record["compiled_question"], record["model_id"], gi.policy)
     if not raw:
         if short_circuit:
             _validate_short_circuit_record(record, stored)
@@ -245,14 +276,6 @@ def replay_verdict(record: Mapping[str, Any]) -> DecisionVerdict:
         if stored.status is not EpistemicStatus.SKIPPED_DEPENDENCY:
             raise ValueError("only dependency skips may have no raw distribution")
         return stored
-    gi = GateInputs.from_jsonable(record["gate_inputs"])
-    if schema == SCHEMA_VERSION:
-        _require_declared_support(gi, record["compiled_question"])
-        digest = compute_replay_digest_v3(
-            record["state_hash"], record["compiled_question"], record["model_id"], gi)
-    else:
-        digest = compute_replay_digest(
-            record["state_hash"], record["compiled_question"], record["model_id"], gi.policy)
     result = evaluate(gi, raw, digest)
     if schema == "s1core.audit/1":
         events = {"permutation_divergence": stored.permutation_divergence,

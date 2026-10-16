@@ -300,6 +300,80 @@ class SchemaV3LawTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     replay_verdict(record)
 
+    def test_short_circuit_flag_on_an_inference_record_raises(self):
+        record = self.ratified_record()
+        record["postprocessing"] = dict(record["postprocessing"],
+                                        loop_guard_short_circuit=True)
+        with self.assertRaises(ValueError):
+            replay_verdict(record)
+
+    def test_short_circuit_flag_must_be_a_boolean(self):
+        for flag in (1, "yes"):
+            with self.subTest(flag=flag):
+                record = self.ratified_record()
+                record["postprocessing"] = dict(record["postprocessing"],
+                                                loop_guard_short_circuit=flag)
+                with self.assertRaises(ValueError):
+                    replay_verdict(record)
+
+    def _skip_record(self):
+        """A genuine v3 SKIPPED_DEPENDENCY record: the dependency abstains,
+        so the dependent question never reaches the backend."""
+        from fixtures import ABSTAIN_DIST, ScriptedDriver
+        first = ChoiceSpec(
+            question_id="lane",
+            instructions="Which handling lane does this ticket belong in?",
+            options={"fast": "Automated fast-track handling, no human contact.",
+                     "slow": "A human agent reviews before any action."},
+        )
+        second = ChoiceSpec(
+            question_id="exceeds",
+            instructions="Does the requested refund exceed the order total?",
+            options={"yes": "The refund is larger than the order total.",
+                     "no": "The refund is within the order total."},
+            depends_on=(("lane", "fast"),),
+        )
+        ledger = InMemoryAuditLedger()
+        harness = System1Harness(
+            ScriptedDriver({"lane": dict(ABSTAIN_DIST),
+                            "exceeds": {"yes": 0.9, "no": 0.1}}), ledger)
+        harness.evaluate({}, [first, second],
+                         reference_time_iso="2026-10-14T12:00:00+00:00")
+        record = next(r for r in ledger.records
+                      if r.verdict["status"] == "SKIPPED_DEPENDENCY")
+        self.assertFalse(record.raw_probabilities)
+        return dict(record.to_jsonable())
+
+    def test_v3_dependency_skip_requires_support_metadata(self):
+        missing = self._skip_record()
+        missing["gate_inputs"].pop("declared_keys")
+        with self.assertRaises(ValueError):
+            replay_verdict(missing)
+        disagreeing = self._skip_record()
+        disagreeing["gate_inputs"]["declared_keys"] = ["some_option_never_declared"]
+        with self.assertRaises(ValueError):
+            replay_verdict(disagreeing)
+
+    def test_v3_short_circuit_requires_support_metadata(self):
+        missing = self._short_circuit_record()
+        missing["gate_inputs"].pop("declared_keys")
+        with self.assertRaises(ValueError):
+            replay_verdict(missing)
+        disagreeing = self._short_circuit_record()
+        disagreeing["gate_inputs"]["declared_keys"] = ["some_option_never_declared"]
+        with self.assertRaises(ValueError):
+            replay_verdict(disagreeing)
+
+    def test_v3_record_must_address_its_own_content(self):
+        tampered_short = self._short_circuit_record()
+        tampered_short["verdict"]["replay_digest"] = "0" * 32
+        with self.assertRaises(ValueError):
+            replay_verdict(tampered_short)
+        tampered_inference = self.ratified_record()
+        tampered_inference["verdict"]["replay_digest"] = "0" * 32
+        with self.assertRaises(ValueError):
+            replay_verdict(tampered_inference)
+
 
 if __name__ == "__main__":
     unittest.main()
