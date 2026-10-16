@@ -901,7 +901,7 @@ function certificationSection(run) {
     `<button class="tab ${i === 0 ? 'active' : ''}" data-cand="${i}">${esc(c.model_id)} — ${c.promoted ? 'PROMOTE' : 'REJECT'}</button>`).join('');
   return `
   <div class="section" id="certification">
-    <h2>Certification <span class="hint">the only law that promotes is wrong == 0 · abstention is coverage loss, not wrongness</span></h2>
+    <h2>Certification <span class="hint">the laws that promote: zero incorrect ratifications · declared useful coverage met · abstention is coverage loss, not wrongness</span></h2>
     <div class="tabs" id="cert-tabs">${tabs}</div>
     <div id="cert-body"></div>
   </div>`;
@@ -909,9 +909,14 @@ function certificationSection(run) {
 
 function renderCandidate(run, i) {
   const c = run.candidates[i];
+  const reasons = [];
+  if (c.incorrect_count) {
+    reasons.push(`incorrect ratifications=${c.incorrect_count} (must be 0): ${c.incorrect.map((w) => `${esc(w.question_id)}/${esc(w.case_id)} ratified ${esc(JSON.stringify(w.ratified))}, pinned ${esc(JSON.stringify(w.pinned))}`).join('; ')}`);
+  }
+  (c.coverage_failures || []).forEach((f) => reasons.push(`coverage failure: ${esc(f.question_id)}: ${esc(f.reason)}`));
   const banner = c.promoted
-    ? `<div class="cert-banner promote"><span class="verdict">CERTIFICATE: PROMOTE</span> — wrong=0 on ${run.pinned_cases} pinned case-questions; abstentions are coverage loss, not wrongness.</div>`
-    : `<div class="cert-banner reject"><span class="verdict">CERTIFICATE: REJECT</span> — wrong=${c.wrong_count} (must be 0): ${c.wrongs.map((w) => `${esc(w.question_id)}/${esc(w.case_id)} ratified ${esc(JSON.stringify(w.ratified))}, pinned ${esc(JSON.stringify(w.pinned))}`).join('; ')}</div>`;
+    ? `<div class="cert-banner promote"><span class="verdict">CERTIFICATE: PROMOTE</span> — 0 incorrect ratifications on ${run.pinned_cases} pinned case-questions, declared useful coverage met on every question.</div>`
+    : `<div class="cert-banner reject"><span class="verdict">CERTIFICATE: REJECT</span> — ${reasons.join(' | ')}</div>`;
   const rows = c.rows.map((r) => {
     const heat = Math.min(1, r.drift * 2.5);
     const heatColor = `rgba(248, 81, 73, ${Math.round(heat * 60) / 100})`;
@@ -921,13 +926,13 @@ function renderCandidate(run, i) {
       <td>${chip(r.base_status, ' small')}</td>
       <td class="value-mono">${r.base_value === null ? '—' : esc(JSON.stringify(r.base_value))}</td>
       <td>${chip(r.cand_status, ' small')}</td>
-      <td class="value-mono">${r.cand_value === null ? '—' : esc(JSON.stringify(r.cand_value))}${r.wrong ? ' <span class="chip LOOP_GUARD_TRIPPED small">WRONG</span>' : ''}</td>
+      <td class="value-mono">${r.cand_value === null ? '—' : esc(JSON.stringify(r.cand_value))}${r.incorrect ? ' <span class="chip LOOP_GUARD_TRIPPED small">INCORRECT</span>' : ''}</td>
       <td><span class="heat" style="background:${heatColor}">${fmt(r.drift, 3)}</span></td>
       <td class="value-mono dim">${esc(JSON.stringify(r.pinned))}</td>
     </tr>`;
   }).join('');
   const pq = Object.entries(c.per_question).map(([qid, s]) =>
-    `<span class="stage-chip">${esc(qid)}: wrong ${s.wrong} · ratified ${s.ratified} · drift ${fmt(s.mean_drift)}–${fmt(s.max_drift)} bits</span>`).join('<span class="stage-arrow">·</span> ');
+    `<span class="stage-chip">${esc(qid)}: incorrect ${s.incorrect} · coverage ${s.coverage === null ? 'not evaluated' : `${Math.round(s.coverage * 100)}% (floor ${Math.round(s.floor * 100)}%)`} · drift ${fmt(s.mean_drift)}–${fmt(s.max_drift)} bits</span>`).join('<span class="stage-arrow">·</span> ');
   document.getElementById('cert-body').innerHTML = `
     ${banner}
     <div class="stage-strip" style="margin-bottom:10px">${pq}</div>
@@ -948,7 +953,7 @@ function cascadeSection(run) {
       <td class="value-mono">${esc(t.name)}${t.name === cheapest ? ' ◀ cheapest zero-wrong' : ''}</td>
       <td class="value-mono dim" title="${esc(JSON.stringify(t.policy))}">T=${fmt(t.policy.temperature, 2)} top1≥${t.policy.min_top1_prob}${t.policy.conformal_tau != null ? ` τ=${fmt(t.policy.conformal_tau, 2)}` : ''}</td>
       <td class="value-mono">${t.handled} <span class="faint">(${Math.round((t.handled / run.routed_cases) * 100)}%)</span></td>
-      <td class="value-mono" style="${t.wrong ? 'color:var(--red)' : 'color:var(--green)'}">${t.wrong}</td>
+      <td class="value-mono" style="${t.shipped_wrong ? 'color:var(--red)' : 'color:var(--green)'}">${t.shipped_wrong}</td>
       <td class="value-mono">${t.escalated}</td>
       <td class="value-mono">${t.avg_latency_ms} ms</td>
       <td class="value-mono">$${fmt(t.cost_per_1k, 4)}</td>

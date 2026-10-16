@@ -343,9 +343,10 @@ def run_certification() -> dict:
                          lane_regression=True, salt="rc1"),
         msc.SyntheticJev("jev-next-rc2", quality_lift=0.22,
                          lane_regression=False, salt="rc1"),
+        msc.AlwaysAbstainJev(),
     ):
         harness = System1Harness(driver, augmentor=AUGMENTOR)
-        rows, per_q, wrongs = [], {}, []
+        rows, per_q, incorrect = [], {}, []
         for state in states:
             verdicts = harness.evaluate(
                 state, specs, reference_time_iso=msc.REFERENCE_TIME_ISO,
@@ -358,10 +359,10 @@ def run_certification() -> dict:
                 drift = js_divergence_bits(
                     normalize(base_rec.raw_probabilities),
                     verdict.probabilities)
-                wrong = (verdict.status is EpistemicStatus.RATIFIED
-                         and not values_match(verdict.value, pinned))
-                if wrong:
-                    wrongs.append({
+                ratified_incorrect = (verdict.status is EpistemicStatus.RATIFIED
+                                      and not values_match(verdict.value, pinned))
+                if ratified_incorrect:
+                    incorrect.append({
                         "case_id": state["case_id"],
                         "question_id": spec.question_id,
                         "ratified": verdict.value,
@@ -376,23 +377,46 @@ def run_certification() -> dict:
                     "cand_value": verdict.value,
                     "pinned": pinned,
                     "drift": round(drift, 4),
-                    "wrong": wrong,
+                    "incorrect": ratified_incorrect,
                 })
                 stat = per_q.setdefault(spec.question_id, {
-                    "wrong": 0, "ratified": 0, "drifts": []})
-                if verdict.status is EpistemicStatus.RATIFIED:
-                    stat["ratified"] += 1
-                stat["wrong"] += 1 if wrong else 0
+                    "incorrect": 0, "ratified": 0, "eligible": 0, "drifts": []})
+                if verdict.status is not EpistemicStatus.SKIPPED_DEPENDENCY:
+                    stat["eligible"] += 1
+                    if verdict.status is EpistemicStatus.RATIFIED:
+                        stat["ratified"] += 1
+                stat["incorrect"] += 1 if ratified_incorrect else 0
                 stat["drifts"].append(drift)
+        coverage_failures = []
+        for spec in specs:
+            s, floor = per_q[spec.question_id], msc.MIN_USEFUL_COVERAGE[spec.question_id]
+            s["floor"] = floor
+            if s["eligible"] == 0:
+                s["coverage"] = None
+                coverage_failures.append(
+                    {"question_id": spec.question_id, "reason": "not evaluated (0 eligible cases)"})
+            else:
+                s["coverage"] = s["ratified"] / s["eligible"]
+                if s["coverage"] < floor:
+                    coverage_failures.append({
+                        "question_id": spec.question_id,
+                        "reason": (f"coverage {s['ratified']}/{s['eligible']} "
+                                   f"= {s['coverage']:.0%} < declared floor {floor:.0%}"),
+                    })
         candidates.append({
             "model_id": driver.model_id,
-            "promoted": not wrongs,
-            "wrong_count": len(wrongs),
-            "wrongs": wrongs,
+            "promoted": not incorrect and not coverage_failures,
+            "incorrect_count": len(incorrect),
+            "incorrect": incorrect,
+            "coverage_failures": coverage_failures,
             "per_question": {
                 qid: {
-                    "wrong": s["wrong"],
+                    "incorrect": s["incorrect"],
                     "ratified": s["ratified"],
+                    "eligible": s["eligible"],
+                    "coverage": (None if s["coverage"] is None
+                                 else round(s["coverage"], 4)),
+                    "floor": s["floor"],
                     "mean_drift": round(sum(s["drifts"]) / len(s["drifts"]), 4),
                     "max_drift": round(max(s["drifts"]), 4),
                 }
@@ -437,7 +461,7 @@ def run_cascade() -> dict:
             "name": name,
             "policy": asdict(policy),
             "handled": result["handled"],
-            "wrong": result["wrong"],
+            "shipped_wrong": result["shipped_wrong"],
             "escalated": result["escalated"],
             "cost_per_1k": round(cost * 1000 / len(routed), 4),
             "avg_latency_ms": round(latency / len(routed)),
@@ -449,7 +473,7 @@ def run_cascade() -> dict:
         driver, routed, [spec],
         lambda state, qid: crc.pinned_lane(state))
 
-    zero_wrong = [t for t in tiers if t["wrong"] == 0]
+    zero_wrong = [t for t in tiers if t["shipped_wrong"] == 0]
     return build_run(
         kind="cascade", driver=driver, backend_kind="toy",
         records=ledger.records, labels=labels,
@@ -541,6 +565,15 @@ def run_recalibration() -> dict:
     fits = {}
     for qid, primitive in nrc.QUESTIONS.items():
         fits[qid] = fit_samples(collect_samples(records, labels, qid), primitive)
+        # tie each fit to its (task, sensor) identity — never fit across a
+        # silently changed spec or model
+        identities = {r.get("spec_digest") for r in records
+                      if r.get("raw_probabilities")
+                      and r["compiled_question"]["question_id"] == qid}
+        if len(identities) != 1:
+            raise ApiError(422, f"'{qid}' spans {len(identities)} spec identities; "
+                                f"calibration fits one spec_digest at a time")
+        fits[qid]["spec_digest"] = identities.pop()
     digest = digest_of({qid: {k: f[k] for k in ("temperature", "conformal_tau")}
                         for qid, f in fits.items()})
 
@@ -602,8 +635,9 @@ SCENARIOS = [
         "deterministic": True,
         "description": (
             "Twelve pinned orders certified against the ledger: baseline "
-            "replays wrong=0, then two candidates are judged by the only law "
-            "that promotes — wrong == 0."
+            "replays with zero mismatches, then three candidates are judged "
+            "by the two laws that promote — zero incorrect ratifications and "
+            "declared useful coverage met."
         ),
     },
     {

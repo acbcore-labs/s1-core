@@ -12,11 +12,16 @@ Flow (one run = one night, deterministic):
 1. Two sealed traffic windows (yesterday, tonight) run through the full
    harness into JSONL ledgers. Labels land for ~75% of cases — outcomes are
    always late; unlabeled cases are excluded from fitting, not imputed.
-2. Per question, samples are extracted from the ledger records and fitted:
-   ``fit_gate_policy`` with explicit disjoint splits for choice (temperature
-   + conformal tau); ``fit_temperature`` alone for score and noul — tau is a
-   choice-primitive gate, and pretending otherwise would be a policy that
-   does not obey its own law.
+2. Labels enter as a provenance-carrying table — label, source kind,
+   labeler id, observed-at time, and the two join keys that tie it to the
+   exact decision: ``record_digest`` (the audited decision) and
+   ``spec_digest`` (the task+sensor identity). Correspondence is an
+   enforced join requirement: missing, spec-mismatched, or conflicting
+   labels are excluded with counts, never silently joined. Per question
+   group, samples are fitted: ``fit_gate_policy`` with explicit disjoint
+   splits for choice (temperature + conformal tau); ``fit_temperature``
+   alone for score and noul — tau is a choice-primitive gate, and pretending
+   otherwise would be a policy that does not obey its own law.
 3. The fitted policy is counterfactually applied to tonight's raw
    distributions with the pure Stage 4 gate: ratified rate, wrong-while-
    ratified, and ECE before/after — the ops tradeoff, not a promise.
@@ -77,6 +82,13 @@ WINDOW_CASES = 200
 UNIFORM_MIX = 0.15  # mild under-confidence: the pathology temperature fixing recovers
 FLIP_RATE = 0.08    # genuine ranking errors: the sensor sometimes peaks on a
                     # plausible confusion — what the conformal gate must refuse
+
+# Label provenance (fixed stamps keep the run deterministic). A production
+# stream would carry these on every label row: where the truth came from,
+# who produced it, and when it was observed relative to the decision.
+LABEL_SOURCE = "business_rule"  # rule | human | event | model_judge
+LABELER_ID = "refund-policy-rules/v1"
+LABEL_OBSERVED_ISO = "2026-10-16T09:00:00+00:00"
 
 QUESTIONS = {
     "refund_lane": "choice",
@@ -265,21 +277,95 @@ def run_window(cases: list[dict], ledger_path: Path) -> None:
         )
 
 
-def extract_samples(ledger_path: Path, cases: list[dict]) -> dict[str, list[Sample]]:
-    """Join ledger records to outcome labels; unlabeled cases drop out."""
-    labeled = {c["ticket_id"]: truth(c) for c in cases if int(c["ticket_id"][-3:]) % 4 != 3}
-    samples: dict[str, list[Sample]] = {qid: [] for qid in QUESTIONS}
+def load_records(ledger_path: Path) -> list[dict]:
     with ledger_path.open(encoding="utf-8") as fh:
-        for line in fh:
-            if not line.strip():
-                continue
-            record = json.loads(line)
-            ticket = record["canonical_state"]["raw_state"]["ticket_id"]
-            if ticket not in labeled:
-                continue
-            qid = record["compiled_question"]["question_id"]
-            samples[qid].append((record["raw_probabilities"], labeled[ticket][qid]))
-    return samples
+        return [json.loads(line) for line in fh if line.strip()]
+
+
+def build_label_table(records: list[dict], cases: list[dict]):
+    """The business system's outcome labels, as a provenance-carrying table.
+
+    One row per labeled decision: the label, where it came from, who produced
+    it, when it was observed, and the two join keys that tie it to the exact
+    decision — ``record_digest`` (the audited decision) and ``spec_digest``
+    (the task+sensor identity). Two label rows that disagree about the same
+    decision poison that digest: the conflict is counted and the decision is
+    excluded at join time.
+    """
+    labeled = {c["ticket_id"]: truth(c) for c in cases if int(c["ticket_id"][-3:]) % 4 != 3}
+    rows: dict[str, dict] = {}
+    conflicted: set[str] = set()
+    for record in records:
+        if not record.get("raw_probabilities"):
+            continue  # dependency skips are decisions that never ran
+        ticket = record["canonical_state"]["raw_state"]["ticket_id"]
+        if ticket not in labeled:
+            continue  # outcome not yet observed: no label row exists
+        digest = record["record_digest"]
+        qid = record["compiled_question"]["question_id"]
+        row = {
+            "record_digest": digest,
+            "spec_digest": record["spec_digest"],
+            "question_id": qid,
+            "label": labeled[ticket][qid],
+            "source": LABEL_SOURCE,
+            "labeler_id": LABELER_ID,
+            "observed_utc": LABEL_OBSERVED_ISO,
+        }
+        if digest in rows and rows[digest]["label"] != row["label"]:
+            conflicted.add(digest)
+            continue
+        rows.setdefault(digest, row)
+    return rows, conflicted
+
+
+def load_joined(ledger_path: Path, cases: list[dict]) -> tuple[list[tuple[dict, dict]], dict[str, int]]:
+    """Join ledger records to label rows under enforced correspondence.
+
+    A record joins only when a label row exists for its ``record_digest``
+    AND that row's ``spec_digest`` equals the record's. Everything else is
+    excluded with a count — unobserved outcomes, spec mismatches (a policy
+    change or model swap must start a fresh sample set, not silently
+    re-label a different task), and conflicting labels — never silently
+    joined.
+    """
+    records = load_records(ledger_path)
+    label_rows, conflicted = build_label_table(records, cases)
+    labeled_ids = {c["ticket_id"] for c in cases if int(c["ticket_id"][-3:]) % 4 != 3}
+    joined: list[tuple[dict, dict]] = []
+    unobserved = mismatched = 0
+    for record in records:
+        if not record.get("raw_probabilities"):
+            continue
+        digest = record["record_digest"]
+        if digest in conflicted:
+            continue  # counted as conflicting in the provenance summary
+        ticket = record["canonical_state"]["raw_state"]["ticket_id"]
+        row = label_rows.get(digest)
+        if row is None or ticket not in labeled_ids:
+            unobserved += 1
+            continue
+        if row["spec_digest"] != record["spec_digest"]:
+            mismatched += 1
+            continue
+        joined.append((record, row))
+    provenance = {"joined": len(joined), "outcome_unobserved_or_missing": unobserved,
+                  "spec_mismatch_excluded": mismatched,
+                  "conflicting_excluded": len(conflicted)}
+    return joined, provenance
+
+
+def extract_samples(ledger_path: Path, cases: list[dict]) -> tuple[dict[str, dict], dict[str, int]]:
+    """Group joined samples by ``spec_digest`` — the (task, sensor) identity —
+    so a policy edit or model swap starts a fresh sample set instead of
+    silently re-labeling a different task."""
+    joined, provenance = load_joined(ledger_path, cases)
+    groups: dict[str, dict] = {}
+    for record, row in joined:
+        group = groups.setdefault(row["spec_digest"],
+                                  {"question_id": row["question_id"], "samples": []})
+        group["samples"].append((record["raw_probabilities"], row["label"]))
+    return groups, provenance
 
 
 def fit_question(primitive: str, samples: list[Sample]):
@@ -301,12 +387,15 @@ def fit_question(primitive: str, samples: list[Sample]):
 
 
 def snapshot_for(window_name: str, cases: list[dict], ledger_path: Path) -> dict:
-    samples = extract_samples(ledger_path, cases)
+    groups, provenance = extract_samples(ledger_path, cases)
     questions = {}
-    for qid, primitive in QUESTIONS.items():
-        policy, n_fit, n_cal, coverage, ece_after = fit_question(primitive, samples[qid])
+    for spec_digest, group in groups.items():
+        qid = group["question_id"]
+        primitive = QUESTIONS[qid]
+        policy, n_fit, n_cal, coverage, ece_after = fit_question(primitive, group["samples"])
         questions[qid] = {
             "primitive": primitive,
+            "spec_digest": spec_digest,
             "temperature": round(policy.temperature, 6),
             "conformal_tau": (None if policy.conformal_tau is None
                               else round(policy.conformal_tau, 6)),
@@ -320,6 +409,7 @@ def snapshot_for(window_name: str, cases: list[dict], ledger_path: Path) -> dict
         "window": window_name,
         "alpha": ALPHA,
         "window_cases": len(cases),
+        "label_provenance": provenance,
         "questions": questions,
     }
     snapshot["snapshot_digest"] = digest_of(snapshot)
@@ -332,40 +422,33 @@ def counterfactual(ledger_path: Path, cases: list[dict], tonight: dict) -> None:
     fitted = {qid: replace(GatePolicy(), temperature=q["temperature"],
                            conformal_tau=q["conformal_tau"])
               for qid, q in tonight["questions"].items()}
-    labeled = {c["ticket_id"]: truth(c) for c in cases if int(c["ticket_id"][-3:]) % 4 != 3}
+    joined, _ = load_joined(ledger_path, cases)
     rows: dict[str, dict] = {}
-    with ledger_path.open(encoding="utf-8") as fh:
-        for line in fh:
-            if not line.strip():
-                continue
-            record = json.loads(line)
-            ticket = record["canonical_state"]["raw_state"]["ticket_id"]
-            if ticket not in labeled:
-                continue
-            qid = record["compiled_question"]["question_id"]
-            primitive = QUESTIONS[qid]
-            label = labeled[ticket][qid]
-            gi = GateInputs.from_jsonable(record["gate_inputs"])
-            row = rows.setdefault(qid, {"n": 0, "def_rat": 0, "def_wrong": 0,
-                                        "fit_rat": 0, "fit_wrong": 0,
-                                        "samples": []})
-            row["n"] += 1
-            row["samples"].append((record["raw_probabilities"], label))
-            for policy, rat_key, wrong_key in (
-                (GatePolicy(), "def_rat", "def_wrong"),
-                (fitted[qid], "fit_rat", "fit_wrong"),
-            ):
-                verdict = evaluate(replace(gi, policy=policy),
-                                   record["raw_probabilities"], "counterfactual")
-                if verdict.status is EpistemicStatus.RATIFIED:
-                    row[rat_key] += 1
-                    if primitive in ("choice", "noul"):
-                        if not values_match(verdict.value, label):
-                            row[wrong_key] += 1
-                    elif round(verdict.value) != int(label):
+    for record, row_label in joined:
+        qid = row_label["question_id"]
+        primitive = QUESTIONS[qid]
+        label = row_label["label"]
+        gi = GateInputs.from_jsonable(record["gate_inputs"])
+        row = rows.setdefault(qid, {"n": 0, "def_rat": 0, "def_wrong": 0,
+                                    "fit_rat": 0, "fit_wrong": 0,
+                                    "samples": []})
+        row["n"] += 1
+        row["samples"].append((record["raw_probabilities"], label))
+        for policy, rat_key, wrong_key in (
+            (GatePolicy(), "def_rat", "def_wrong"),
+            (fitted[qid], "fit_rat", "fit_wrong"),
+        ):
+            verdict = evaluate(replace(gi, policy=policy),
+                               record["raw_probabilities"], "counterfactual")
+            if verdict.status is EpistemicStatus.RATIFIED:
+                row[rat_key] += 1
+                if primitive in ("choice", "noul"):
+                    if not values_match(verdict.value, label):
                         row[wrong_key] += 1
+                elif round(verdict.value) != int(label):
+                    row[wrong_key] += 1
 
-    print(f"\n--- tonight's counterfactual (n={len(labeled)} labeled of {len(cases)}) ---")
+    print(f"\n--- tonight's counterfactual (n={len(joined)} labeled of {len(cases)}) ---")
     print(f"  {'question':12s} {'ECE raw':>8s} {'ECE fit':>8s}   "
           f"{'ratified def→fit':>18s}   {'wrong-while-ratified def→fit':>28s}")
     for qid, primitive in QUESTIONS.items():
@@ -416,6 +499,13 @@ def main() -> None:
             tau = ("—" if q["conformal_tau"] is None
                    else f"tau={q['conformal_tau']:.3f}")
             print(f"{qid:12s} ({q['primitive']:6s}) T={q['temperature']:.3f} {tau}{extra}")
+        prov = tonight["label_provenance"]
+        print(f"\nlabel provenance: {prov['joined']} joined · "
+              f"{prov['outcome_unobserved_or_missing']} unobserved/missing · "
+              f"{prov['spec_mismatch_excluded']} spec-mismatched · "
+              f"{prov['conflicting_excluded']} conflicting — "
+              f"source={LABEL_SOURCE} labeler={LABELER_ID} "
+              f"(excluded with counts, never silently joined)")
 
         diff_snapshots(yesterday, tonight)
         counterfactual(tmp_path / "tonight.jsonl", tonight_cases, tonight)

@@ -2,9 +2,16 @@
 
 Design pattern: model-swap certification. A production audit ledger is not
 just a compliance artifact; it is a frozen evaluation set. The licence law
-this operationalizes: a candidate may be promoted only where it re-derives
-every pinned outcome with ``wrong == 0`` on the cases the current model is
-licensed to serve.
+this operationalizes has two clauses, both declared in advance:
+
+1. ZERO INCORRECT RATIFICATIONS — the candidate ratifies no answer that
+   differs from the pinned outcome on the cases the current model is
+   licensed to serve.
+2. DECLARED MINIMUM USEFUL COVERAGE — every question ratifies on at least
+   the declared fraction of its eligible cases (``MIN_USEFUL_COVERAGE``).
+   The floor is a stated business requirement, not a tuned threshold: an
+   always-abstaining sensor is not a safe sensor, and under a wrongness-only
+   law it would promote vacuously.
 
 Flow (three phases, all deterministic):
 
@@ -13,20 +20,22 @@ Flow (three phases, all deterministic):
    already exist; this phase only stands in for history.
 2. PREFLIGHT — the ledger must be a valid licence before anything certifies
    against it: ``verify_chain`` must pass and every recorded verdict must
-   replay bit-for-bit (``replay_verdict``, wrong == 0).
+   replay bit-for-bit (``replay_verdict``, replay mismatches == 0).
 3. CERTIFY — each candidate re-evaluates the same raw states under the same
-   specs. A candidate is PROMOTED iff it ratifies no wrong answer on the
-   pinned set. Abstentions are coverage loss, reported, never wrongness.
-   Per-question probability drift (JS divergence, bits) and status flips are
-   telemetry only — a drift budget would be a tuned threshold, so drift is
-   not gated; wrongness is.
+   specs. Coverage is ratified/eligible per question; eligible excludes
+   dependency skips, and a question with no eligible cases is "not
+   evaluated" and fails the certificate. Per-question probability drift
+   (JS divergence, bits) and status flips are telemetry only — a drift
+   budget would be a tuned threshold, so drift is not gated; incorrect
+   ratifications and declared coverage are.
 
 Why the demo is deterministic (no live backend): a certificate must
 reproduce. The synthetic stand-in drivers derive every distribution from the
 case content via blake2b — same state, same probabilities, forever. Swap in
-real drivers (hosted or local) and the procedure is unchanged. The two
+real drivers (hosted or local) and the procedure is unchanged. The three
 candidates simulate the classic promotion failure — a checkpoint better on
-average that broke one lane — and its clean rebuild.
+average that broke one lane — its clean rebuild, and the vacuous
+always-abstainer that a wrongness-only law would promote.
 """
 
 import sys
@@ -60,6 +69,11 @@ from s1core.types import EpistemicStatus  # noqa: E402
 
 REFERENCE_TIME_ISO = "2026-10-15T12:00:00+00:00"
 ESCAPE_KEYS = (ABSTAIN_INSUFFICIENT_EVIDENCE, ABSTAIN_OUT_OF_DOMAIN)
+
+# Declared acceptance criteria: each question must ratify on at least this
+# fraction of its eligible cases for any candidate to promote. Declared a
+# priori as the business requirement — not tuned against any candidate.
+MIN_USEFUL_COVERAGE = {"refund_lane": 0.5, "exceeds_total": 0.5}
 
 # (case_id, order_total, requested_refund, account_age_days, prior_chargebacks)
 CASES = [
@@ -216,27 +230,51 @@ class SyntheticJev:
         return out
 
 
+class AlwaysAbstainJev(SyntheticJev):
+    """The vacuous candidate: full declared support, all choice mass on the
+    injected escape hatches, the noul answer parked in the gray zone. Zero
+    wrongness — and zero automation. Under a wrongness-only promotion law
+    this model is certified; the declared coverage floor rejects it."""
+
+    def __init__(self):
+        super().__init__("jev-vacuous-abstainer")
+
+    def score_branches(self, handle, batch):
+        out = {}
+        for question_id, compiled in batch.items():
+            if question_id == "exceeds_total":
+                out[question_id] = {"true": 0.5, "false": 0.5}  # gray zone
+            else:
+                dist = {key: 0.0 for key in compiled.criteria}
+                for key in ESCAPE_KEYS:
+                    dist[key] = 1.0 / len(ESCAPE_KEYS)
+                out[question_id] = dist
+        return out
+
+
 def load_ledger(path: Path) -> list[dict]:
     with path.open(encoding="utf-8") as fh:
         return [json.loads(line) for line in fh if line.strip()]
 
 
-def replay_wrong_count(records: list[dict]) -> int:
-    wrong = 0
+def count_replay_mismatches(records: list[dict]) -> int:
+    mismatches = 0
     for record in records:
         replayed = replay_verdict(record)
         stored = record["verdict"]
         if replayed.status.value != stored["status"] or replayed.value != stored["value"]:
-            wrong += 1
-    return wrong
+            mismatches += 1
+    return mismatches
 
 
 def certify(candidate: SyntheticJev, specs, records: list[dict]) -> bool:
     """Re-evaluate the pinned cases under the candidate and issue a verdict.
 
-    Certificate law: wrong == 0, where wrong means the candidate RATIFIED a
-    value that differs from the pinned outcome. Abstention is coverage loss.
-    Baseline wrongs are context only — the certificate binds the candidate.
+    Certificate law: zero incorrect ratifications on the pinned set, and the
+    declared minimum useful coverage met on every question. Coverage is
+    ratified/eligible; eligible excludes dependency skips, and a question
+    with no eligible cases is "not evaluated" and fails. Baseline wrongs are
+    context only — the certificate binds the candidate.
     """
     harness = System1Harness(candidate, augmentor=AUGMENTOR)
     baseline = {
@@ -245,9 +283,8 @@ def certify(candidate: SyntheticJev, specs, records: list[dict]) -> bool:
         for r in records
     }
     stats: dict[str, dict] = {}
-    wrongs: list[str] = []
+    incorrect_ratifications: list[str] = []
     pinned = 0
-    ratified = 0
     for case in CASES:
         state = case_state(case)
         verdicts = harness.evaluate(
@@ -263,36 +300,57 @@ def certify(candidate: SyntheticJev, specs, records: list[dict]) -> bool:
             key = (case[0], spec.question_id)
             base = baseline[key]
             stat = stats.setdefault(spec.question_id, {
-                "wrong": 0, "ratified": 0, "drift": [], "flips": 0})
-            if verdict.status is EpistemicStatus.RATIFIED:
-                ratified += 1
-                stat["ratified"] += 1
-                if not values_match(verdict.value, truth):
-                    stat["wrong"] += 1
-                    wrongs.append(
-                        f"{spec.question_id}/{case[0]} ratified {verdict.value!r}, "
-                        f"pinned {truth!r}")
+                "incorrect": 0, "ratified": 0, "eligible": 0, "drift": [], "flips": 0})
+            if verdict.status is not EpistemicStatus.SKIPPED_DEPENDENCY:
+                stat["eligible"] += 1
+                if verdict.status is EpistemicStatus.RATIFIED:
+                    stat["ratified"] += 1
+                    if not values_match(verdict.value, truth):
+                        stat["incorrect"] += 1
+                        incorrect_ratifications.append(
+                            f"{spec.question_id}/{case[0]} ratified {verdict.value!r}, "
+                            f"pinned {truth!r}")
             stat["drift"].append(js_divergence_bits(
                 normalize(base["raw_probabilities"]), verdict.probabilities))
             if base["verdict"]["status"] != verdict.status.name:
                 stat["flips"] += 1
 
-    promoted = not wrongs
+    coverage_failures = []
+    for spec in specs:
+        stat = stats[spec.question_id]
+        floor = MIN_USEFUL_COVERAGE[spec.question_id]
+        if stat["eligible"] == 0:
+            coverage_failures.append(f"{spec.question_id}: not evaluated (0 eligible cases)")
+        elif stat["ratified"] / stat["eligible"] < floor:
+            coverage_failures.append(
+                f"{spec.question_id}: coverage {stat['ratified']}/{stat['eligible']} "
+                f"= {stat['ratified'] / stat['eligible']:.0%} < declared floor {floor:.0%}")
+
+    promoted = not incorrect_ratifications and not coverage_failures
     print(f"\ncandidate {candidate.model_id}"
           f"{' (lane regression injected)' if candidate._lane_regression else ''}")
     for question_id, stat in stats.items():
+        floor = MIN_USEFUL_COVERAGE[question_id]
         drift = stat["drift"]
-        print(f"  {question_id:14s} wrong={stat['wrong']}  "
-              f"ratified {stat['ratified']}/{pinned // len(stats)}  "
+        if stat["eligible"] == 0:
+            coverage = "not evaluated"
+        else:
+            coverage = (f"{stat['ratified'] / stat['eligible']:.0%} "
+                        f"(declared floor {floor:.0%})")
+        print(f"  {question_id:14s} incorrect={stat['incorrect']}  "
+              f"ratified {stat['ratified']}/{stat['eligible']}  coverage {coverage}  "
               f"drift mean {sum(drift) / len(drift):.3f} bits, max {max(drift):.3f}  "
               f"status-flips {stat['flips']}")
     if promoted:
-        print(f"  CERTIFICATE: PROMOTE — wrong=0 on {pinned} pinned case-questions "
-              f"(ratified {ratified}, abstained {pinned - ratified}; "
-              f"abstention is coverage loss, not wrongness)")
+        print(f"  CERTIFICATE: PROMOTE — 0 incorrect ratifications on {pinned} "
+              f"pinned case-questions, declared useful coverage met on every question")
     else:
-        print(f"  CERTIFICATE: REJECT — wrong={len(wrongs)} (must be 0): "
-              f"{'; '.join(wrongs)}")
+        reasons = []
+        if incorrect_ratifications:
+            reasons.append(f"incorrect ratifications={len(incorrect_ratifications)} "
+                           f"(must be 0): {'; '.join(incorrect_ratifications)}")
+        reasons.extend(f"coverage failure: {failure}" for failure in coverage_failures)
+        print(f"  CERTIFICATE: REJECT — {' | '.join(reasons)}")
     return promoted
 
 
@@ -318,8 +376,8 @@ def main() -> None:
 
         # Phase 2 — PREFLIGHT: the ledger must be a valid licence.
         chain_ok = verify_chain(records)
-        replay_wrong = replay_wrong_count(records)
-        baseline_wrong = []
+        replay_mismatches = count_replay_mismatches(records)
+        baseline_incorrect = []
         for record in records:
             case_id = record["canonical_state"]["raw_state"]["case_id"]
             case = case_state(next(c for c in CASES if c[0] == case_id))
@@ -329,22 +387,23 @@ def main() -> None:
             stored = record["verdict"]
             if (stored["status"] == "RATIFIED"
                     and not values_match(stored["value"], truth)):
-                baseline_wrong.append(case_id)
+                baseline_incorrect.append(case_id)
         print("=== model-swap certification ===")
         print(f"licence preflight: chain verified={chain_ok}  "
-              f"replay {len(records) - replay_wrong}/{len(records)} wrong={replay_wrong}")
-        print(f"baseline prod-jev-snapshot: wrong-while-ratified {len(baseline_wrong)} "
-              f"(context only — the certificate binds the candidate)")
-        if not chain_ok or replay_wrong:
+              f"replay mismatches={replay_mismatches} of {len(records)} records (must be 0)")
+        print(f"baseline prod-jev-snapshot: incorrect-while-ratified "
+              f"{len(baseline_incorrect)} (context only — the certificate binds the candidate)")
+        if not chain_ok or replay_mismatches:
             raise SystemExit("ledger failed preflight: not a valid licence")
 
-        # Phase 3 — CERTIFY both candidates against the same licence.
+        # Phase 3 — CERTIFY all candidates against the same licence.
         certify(SyntheticJev("jev-next-rc1", quality_lift=0.22,
                              lane_regression=True, salt="rc1"),
                 specs, records)
         certify(SyntheticJev("jev-next-rc2", quality_lift=0.22,
                              lane_regression=False, salt="rc1"),
                 specs, records)
+        certify(AlwaysAbstainJev(), specs, records)
 
 
 if __name__ == "__main__":

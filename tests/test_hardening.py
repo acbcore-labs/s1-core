@@ -6,7 +6,8 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-from s1core.audit import JsonlAuditLedger, make_record, replay_verdict, compute_replay_digest, verify_chain
+from s1core.audit import (JsonlAuditLedger, make_record, replay_verdict,
+                          compute_replay_digest, compute_replay_digest_v3, verify_chain)
 from s1core.calibration import conformal_tau, fit_gate_policy
 from s1core.combiners import CombinerError, LatticeCombiner, NoisyANDCombiner
 from s1core.gates import GateInputs, evaluate, normalize, temperature_scale
@@ -15,10 +16,19 @@ from s1core.types import GatePolicy, EpistemicStatus
 
 class HardeningTests(unittest.TestCase):
     def record(self, primitive="choice", raw=None, divergence=None, loop=False):
-        gi = GateInputs("q", primitive, GatePolicy())
-        state_hash, payload = digest_of({}), {"question_id": "q", "type": primitive}
         raw = raw if raw is not None else {"a": .99, "b": .01}
-        v = evaluate(gi, raw, compute_replay_digest(state_hash, payload, "test", gi.policy))
+        if primitive == "choice":
+            gi = GateInputs("q", primitive, GatePolicy(), declared_keys=frozenset(raw))
+            criteria = {key: f"criteria prose for {key}" for key in raw}
+        elif primitive == "score":
+            gi = GateInputs("q", primitive, GatePolicy(), score_levels=len(raw))
+            criteria = {str(level): f"rubric prose for level {level}" for level in raw}
+        else:
+            gi = GateInputs("q", primitive, GatePolicy())
+            criteria = dict(raw)
+        state_hash = digest_of({})
+        payload = {"question_id": "q", "type": primitive, "criteria": criteria}
+        v = evaluate(gi, raw, compute_replay_digest_v3(state_hash, payload, "test", gi))
         if divergence is not None:
             v = dataclasses.replace(v, permutation_divergence=divergence)
             if divergence > gi.policy.max_permutation_divergence:
@@ -44,14 +54,24 @@ class HardeningTests(unittest.TestCase):
                 evaluate(GateInputs("q", primitive, GatePolicy()), raw, "")
         with self.assertRaises(ValueError):
             evaluate(GateInputs("q", "choice", GatePolicy(min_top1_prob=math.nan)), {"a": 1.}, "")
+        # the noul handler keeps its own exact-keys law for direct callers
+        from s1core.gates import evaluate_noul
+        with self.assertRaises(ValueError):
+            evaluate_noul(GateInputs("q", "noul", GatePolicy()), {"true": 1.0}, "")
 
     def test_post_gate_replay_and_legacy(self):
         for options in ({"divergence": .7}, {"divergence": .01},
                         {"raw": {"a": .5, "b": .5}, "loop": True}, {"divergence": .7, "loop": True}):
             r = self.record(**options).to_jsonable()
             self.assertEqual(replay_verdict(r).to_jsonable(), r["verdict"])
+            # Downgrade to a faithful v1 record: historical schema, no
+            # postprocessing map, and a verdict digest computed with the
+            # legacy (policy-only) algorithm the v1 replay path re-derives.
             r["schema_version"] = "s1core.audit/1"
             r.pop("postprocessing")
+            r["verdict"]["replay_digest"] = compute_replay_digest(
+                r["state_hash"], r["compiled_question"], "test",
+                GatePolicy(**r["gate_inputs"]["policy"]))
             self.assertEqual(replay_verdict(r).to_jsonable(), r["verdict"])
 
     def test_replay_recomputes_and_requires_raw(self):

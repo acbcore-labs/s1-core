@@ -12,7 +12,8 @@ here so specs and gates never see them:
 - A ``noul`` answer is a scalar ``{"noul": p}``; the parser expands it to the
   harness's ``{"true": p, "false": 1-p}``.
 - Choice answers omit zero-probability options sometimes; the parser fills
-  declared criteria keys with 0.0 so gate math sees the full simplex.
+  declared criteria keys with 0.0 so gate math sees the full simplex, and
+  rejects any undeclared option key the wire returns (declared-support law).
 - ``usage.input_tokens``/``output_tokens`` accumulate on the driver
   (input-only billing: $0.042 per 1M input tokens, output free).
 - 429 (rate limit) and 529 (overloaded) are retried with exponential backoff
@@ -64,9 +65,20 @@ def typesafe_response_parser(
             p_true = float(answer["noul"])
             results[question_id] = {"true": p_true, "false": 1.0 - p_true}
         elif primitive == "choice":
-            probs = {str(key): 0.0 for key in compiled.criteria}
+            # Zero-fill declared options, and reject any option the wire
+            # returns that the question never declared — an undeclared key
+            # must never be able to win a ratification (mirrors the gate's
+            # declared-support law at the transport boundary).
+            declared = {str(key) for key in compiled.criteria}
+            probs = {key: 0.0 for key in declared}
             for key, value in answer.get("probabilities", {}).items():
-                probs[str(key)] = float(value)
+                wire_key = str(key)
+                if wire_key not in declared:
+                    raise BackendError(
+                        f"choice answer for '{question_id}' returned undeclared option "
+                        f"'{wire_key}'"
+                    )
+                probs[wire_key] = float(value)
             results[question_id] = probs
         elif primitive == "score":
             # Wire levels are 0-indexed positions; restore harness 1..k keys.

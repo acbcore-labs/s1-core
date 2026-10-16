@@ -170,6 +170,7 @@ class ChoiceSpec:
             primitive=CHOICE,
             policy=self.policy,
             escape_keys=escape_keys,
+            declared_keys=frozenset(compiled),
         )
         return CompiledQuestion(self.question_id, CHOICE, self.instructions, compiled, gate_inputs)
 
@@ -212,7 +213,8 @@ class ScoreSpec:
             _check_criteria(self.question_id, f"L{lvl}", self.rubric_levels[lvl])
             criteria[str(lvl)] = self.rubric_levels[lvl]
         gate_inputs = GateInputs(
-            question_id=self.question_id, primitive=SCORE, policy=self.policy
+            question_id=self.question_id, primitive=SCORE, policy=self.policy,
+            score_levels=len(keys),
         )
         return CompiledQuestion(self.question_id, SCORE, self.instructions, criteria, gate_inputs)
 

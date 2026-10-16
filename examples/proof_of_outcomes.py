@@ -326,7 +326,7 @@ def main() -> None:
     chain_ok = verify_chain([r.to_jsonable() for r in ledger.records])
     print(f"   audit records             : {len(ledger.records)} (content-addressed, hash-chained)")
     print(f"   replay verification       : {len(ledger.records) - mismatches}/{len(ledger.records)} "
-          f"byte-identical (wrong={mismatches})")
+          f"byte-identical (replay_mismatches={mismatches})")
     print(f"   ledger chain verified     : {chain_ok}")
 
 

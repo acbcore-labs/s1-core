@@ -211,7 +211,7 @@ def fit_conformal_tier(cases: list[dict]) -> GatePolicy:
 def route(cases: list[dict], policy: GatePolicy) -> dict:
     harness = System1Harness(CascadeSensor(), augmentor=AUGMENTOR)
     spec = lane_spec(policy)
-    handled = wrong = escalated = 0
+    handled = shipped_wrong = escalated = 0
     for case in cases:
         verdict = harness.evaluate(
             case, [spec], reference_time_iso=REFERENCE_ISO,
@@ -220,10 +220,10 @@ def route(cases: list[dict], policy: GatePolicy) -> dict:
         if verdict.status is EpistemicStatus.RATIFIED:
             handled += 1
             if not values_match(verdict.value, pinned_lane(case)):
-                wrong += 1
+                shipped_wrong += 1
         else:
             escalated += 1  # gray zone, model escape hatch, or gate refusal
-    return {"handled": handled, "wrong": wrong, "escalated": escalated}
+    return {"handled": handled, "shipped_wrong": shipped_wrong, "escalated": escalated}
 
 
 def main() -> None:
@@ -247,15 +247,15 @@ def main() -> None:
     zero_wrong = []
     for name, policy in tiers:
         r = route(routed, policy)
-        accuracy = (r["handled"] - r["wrong"] + r["escalated"]) / len(routed)
+        accuracy = (r["handled"] - r["shipped_wrong"] + r["escalated"]) / len(routed)
         latency = (r["handled"] * S1_LATENCY_MS
                    + r["escalated"] * (S1_LATENCY_MS + S2_LATENCY_MS)) / len(routed)
         cost = (r["handled"] * S1_COST
                 + r["escalated"] * (S1_COST + S2_COST)) * 1000 / len(routed)
-        if r["wrong"] == 0:
+        if r["shipped_wrong"] == 0:
             zero_wrong.append((cost, name))
         print(f"{name:18s} {r['handled'] / len(routed):9.1%} "
-              f"{r['wrong']:14d} {accuracy:11.1%} {latency:10.0f} ms "
+              f"{r['shipped_wrong']:14d} {accuracy:11.1%} {latency:10.0f} ms "
               f"{cost:12.4f}")
     cheapest_safe = min(zero_wrong) if zero_wrong else None
     print(f"\ncheapest tier that ships zero wrong answers: "

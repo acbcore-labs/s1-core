@@ -2,6 +2,7 @@
 debiasing, fail-closed invariants, and byte-identical determinism."""
 
 import unittest
+from contextlib import contextmanager
 
 from s1core import (
     ABSTAIN_INSUFFICIENT_EVIDENCE,
@@ -15,9 +16,12 @@ from s1core import (
     ScoreSpec,
     SpecError,
     System1Harness,
+    compute_spec_digest,
+    replay_verdict,
     verify_chain,
 )
 from s1core.backends import LexicalHeuristicDriver
+from s1core.backends.base import StateHandle
 
 import sys
 from pathlib import Path
@@ -176,7 +180,11 @@ class HarnessTests(unittest.TestCase):
                 for question_id, compiled in batch.items():
                     keys = list(compiled.criteria.keys())
                     first = 0.9 if keys[0] == "fast" else 0.1
-                    out[question_id] = {"fast": first, "slow": 1.0 - first}
+                    # Full declared support: the escape hatches carry zero
+                    # mass; position flips only fast/slow.
+                    out[question_id] = {"fast": first, "slow": 1.0 - first,
+                                        **{k: 0.0 for k in keys
+                                           if k not in ("fast", "slow")}}
                 return out
 
         harness = System1Harness(OrderSensitiveDriver({}))
@@ -256,6 +264,191 @@ class HarnessFailClosedTests(unittest.TestCase):
         harness = System1Harness(OmittingDriver({}))
         with self.assertRaises(RuntimeError):
             harness.evaluate({}, [lane_spec()])
+
+
+class DeclaredSupportBoundaryTests(unittest.TestCase):
+    """The harness enforces the declared output space on every returned
+    distribution — and on both permutation orders *before* averaging."""
+
+    def test_undeclared_backend_key_raises(self):
+        class StrayKeyDriver(ScriptedDriver):
+            def score_branches(self, handle, batch):
+                out = super().score_branches(handle, batch)
+                out["lane"] = {"not_a_declared_option": 1.0}
+                return out
+
+        harness = System1Harness(StrayKeyDriver({}))
+        with self.assertRaises(ValueError):
+            harness.evaluate({}, [lane_spec()])
+
+    def test_debias_incomplete_orders_with_complete_union_raise(self):
+        class HalfSupportedDriver(ScriptedDriver):
+            """Each order omits a *different* declared key; their union is
+            complete. Averaging must never manufacture validity."""
+
+            def score_branches(self, handle, batch):
+                out = {}
+                for question_id, compiled in batch.items():
+                    keys = list(compiled.criteria.keys())
+                    dist = {k: 0.0 for k in keys}
+                    if keys[0] == "fast":        # canonical order
+                        dist["fast"] = 1.0
+                        dist.pop("slow")
+                    else:                        # reversed order
+                        dist["slow"] = 1.0
+                        dist.pop("fast")
+                    out[question_id] = dist
+                return out
+
+        harness = System1Harness(HalfSupportedDriver({}))
+        spec = lane_spec(GatePolicy(min_top1_prob=0.0, min_top2_margin=0.0,
+                                    max_normalized_entropy=1.0, debiased_permutation=True,
+                                    max_permutation_divergence=1.0))
+        with self.assertRaises(ValueError):
+            harness.evaluate({}, [spec])
+
+
+class CountingDriver(ScriptedDriver):
+    """ScriptedDriver that also counts pin_state entries — the latch must
+    prevent both backend operations."""
+
+    def __init__(self, scripted):
+        super().__init__(scripted)
+        self.pins = 0
+
+    @contextmanager
+    def pin_state(self, canonical_state, state_hash):
+        self.pins += 1
+        yield StateHandle(state_hash=state_hash, canonical_state=canonical_state)
+
+
+def plain_choice(qid: str) -> ChoiceSpec:
+    return ChoiceSpec(
+        question_id=qid,
+        instructions="Which handling lane does this ticket belong in exactly?",
+        options={"fast": "one meaningful criteria line here",
+                 "slow": "another meaningful line of prose"},
+    )
+
+
+class LoopGuardLatchTests(unittest.TestCase):
+    def test_tripped_stream_initiates_no_backend_operations(self):
+        driver = CountingDriver({"abstain": dict(ABSTAIN_DIST)})
+        harness = System1Harness(driver)
+        spec = plain_choice("abstain")
+        for _ in range(3):
+            verdicts = harness.evaluate({}, [spec], stream_id="s",
+                                        max_consecutive_abstentions=3)
+        self.assertEqual(verdicts["abstain"].status, EpistemicStatus.LOOP_GUARD_TRIPPED)
+        self.assertEqual(driver.pins, 3)
+        self.assertEqual(len(driver.calls), 3)
+        # latched: verdict and audit record are computed locally
+        verdicts = harness.evaluate({}, [spec], stream_id="s",
+                                    max_consecutive_abstentions=3)
+        self.assertEqual(verdicts["abstain"].status, EpistemicStatus.LOOP_GUARD_TRIPPED)
+        self.assertIsNone(verdicts["abstain"].raw_value)
+        self.assertEqual(driver.pins, 3)
+        self.assertEqual(len(driver.calls), 3)
+
+    def test_reset_stream_reopens_dispatch(self):
+        driver = CountingDriver({"abstain": dict(ABSTAIN_DIST)})
+        harness = System1Harness(driver)
+        spec = plain_choice("abstain")
+        harness.evaluate({}, [spec], stream_id="s", max_consecutive_abstentions=1)
+        harness.evaluate({}, [spec], stream_id="s", max_consecutive_abstentions=1)
+        self.assertEqual(driver.pins, 1)
+        harness.reset_stream("s")
+        verdicts = harness.evaluate({}, [spec], stream_id="s",
+                                    max_consecutive_abstentions=1)
+        # the backend was reached again; at max=1 the fresh abstention
+        # relatches the stream within the same call
+        self.assertEqual(driver.pins, 2)
+        self.assertEqual(verdicts["abstain"].status, EpistemicStatus.LOOP_GUARD_TRIPPED)
+
+    def test_larger_threshold_cannot_reopen_a_tripped_stream(self):
+        driver = CountingDriver({"abstain": dict(ABSTAIN_DIST)})
+        harness = System1Harness(driver)
+        spec = plain_choice("abstain")
+        harness.evaluate({}, [spec], stream_id="s", max_consecutive_abstentions=1)
+        verdicts = harness.evaluate({}, [spec], stream_id="s",
+                                    max_consecutive_abstentions=10)
+        self.assertEqual(verdicts["abstain"].status, EpistemicStatus.LOOP_GUARD_TRIPPED)
+        self.assertEqual(len(driver.calls), 1)
+
+    def test_threshold_must_be_a_positive_integer(self):
+        harness = System1Harness(ScriptedDriver({}))
+        for bad in (0, -1, True, 2.5):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                harness.evaluate({}, [plain_choice("q")], max_consecutive_abstentions=bad)
+
+    def test_latch_tripped_mid_call_short_circuits_the_next_wave(self):
+        driver = CountingDriver({
+            "abstain": dict(ABSTAIN_DIST),
+            "clear": {"fast": 0.9, "slow": 0.1},
+            "followup": {"true": 0.9, "false": 0.1},
+        })
+        harness = System1Harness(driver)
+        # wave 0: abstain trips the latch at max=1; clear ratifies and resets
+        # the counter — the latch must survive. wave 1: followup's parent
+        # ratified, so it would dispatch — the latch short-circuits it.
+        specs = [
+            plain_choice("abstain"),
+            plain_choice("clear"),
+            followup_spec(("clear", "fast")),
+        ]
+        verdicts = harness.evaluate({}, specs, stream_id="s",
+                                    max_consecutive_abstentions=1)
+        self.assertEqual(verdicts["abstain"].status, EpistemicStatus.LOOP_GUARD_TRIPPED)
+        self.assertEqual(verdicts["clear"].status, EpistemicStatus.RATIFIED)
+        self.assertEqual(verdicts["followup"].status, EpistemicStatus.LOOP_GUARD_TRIPPED)
+        self.assertFalse(any("followup" in c for c in driver.calls))
+
+    def test_child_of_short_circuited_parent_is_skipped_and_records_replay(self):
+        driver = CountingDriver({"abstain": dict(ABSTAIN_DIST)})
+        ledger = InMemoryAuditLedger()
+        harness = System1Harness(driver, ledger)
+        specs = [plain_choice("abstain"), followup_spec(("abstain", "fast"))]
+        harness.evaluate({}, specs, stream_id="s", max_consecutive_abstentions=1)
+        harness.evaluate({}, specs, stream_id="s", max_consecutive_abstentions=1)
+        verdicts = harness.evaluate({}, specs, stream_id="s",
+                                    max_consecutive_abstentions=1)
+        self.assertEqual(verdicts["abstain"].status, EpistemicStatus.LOOP_GUARD_TRIPPED)
+        self.assertEqual(verdicts["followup"].status, EpistemicStatus.SKIPPED_DEPENDENCY)
+        self.assertEqual(len(driver.calls), 1)
+        # every record — including the short circuits — replays; chain holds
+        for record in ledger.records:
+            replayed = replay_verdict(record.to_jsonable())
+            self.assertEqual(replayed.status, DecisionVerdict.from_jsonable(record.verdict).status)
+        self.assertTrue(verify_chain([r.to_jsonable() for r in ledger.records]))
+
+
+class SpecDigestTests(unittest.TestCase):
+    """spec_digest identities (task prose, sensor) — stable across states,
+    sensitive to either."""
+
+    def build_record(self, model_id="m1", word="meaningful"):
+        spec = ChoiceSpec(
+            question_id="lane",
+            instructions="Which handling lane does this ticket belong in?",
+            options={"fast": f"one {word} criteria line here",
+                     "slow": "another meaningful line of prose"},
+        )
+        ledger = InMemoryAuditLedger()
+        harness = System1Harness(ScriptedDriver({"lane": {"fast": 0.8, "slow": 0.2}},
+                                                model_id=model_id), ledger)
+        harness.evaluate({"ticket": "t1"}, [spec],
+                         reference_time_iso="2026-10-14T12:00:00+00:00")
+        return ledger.records[0]
+
+    def test_stable_across_states_sensitive_to_sensor_and_task(self):
+        base = self.build_record()
+        self.assertEqual(base.spec_digest,
+                         compute_spec_digest(base.compiled_question, base.model_id))
+        other_state = self.build_record()
+        other_state.canonical_state["raw_state"]["ticket"] = "t2"
+        self.assertEqual(base.spec_digest, other_state.spec_digest)
+        self.assertNotEqual(base.spec_digest, self.build_record(model_id="m2").spec_digest)
+        self.assertNotEqual(base.spec_digest, self.build_record(word="different").spec_digest)
 
 
 if __name__ == "__main__":

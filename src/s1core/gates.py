@@ -18,9 +18,10 @@ Gate math (from the S1-Core design doc):
 
 Every gate fails closed on malformed input: distributions that are empty,
 non-finite, or lack positive mass, score levels outside ``1..k``, unordered
-noul edges, unknown primitives, and out-of-range policy thresholds all raise
-before any verdict is produced. A refused distribution is an ``ABSTAINED_*``
-verdict; a malformed one is an exception.
+noul edges, unknown primitives, out-of-range policy thresholds, and returned
+supports that do not match the declared output space (:func:`validate_support`)
+all raise before any verdict is produced. A refused distribution is an
+``ABSTAINED_*`` verdict; a malformed one is an exception.
 """
 
 from __future__ import annotations
@@ -43,6 +44,12 @@ class GateInputs:
 
     Kept separate from the spec objects so the gate is a pure function and the
     audit ledger can serialize exactly these inputs for replay.
+
+    ``declared_keys`` (choice) and ``score_levels`` (score) carry the
+    *admissible output space* the compiled question declared, so a returned
+    distribution can be judged against it and never against itself. Empty or
+    ``None`` means "not declared" — the v1/v2 ledger tolerance; live compiled
+    questions always supply it (:func:`validate_support`).
     """
 
     question_id: str
@@ -51,16 +58,20 @@ class GateInputs:
     escape_keys: frozenset[str] = frozenset()
     noul_true_edge: float = 0.75   # p(true) >= true_edge  -> ratified True
     noul_false_edge: float = 0.35  # p(true) <= false_edge -> ratified False; between -> abstain
+    declared_keys: frozenset[str] = frozenset()  # choice: exactly these keys may come back
+    score_levels: int | None = None              # score: exactly 1..k may come back
 
     def to_jsonable(self) -> dict[str, Any]:
         return {"question_id": self.question_id, "primitive": self.primitive,
                 "policy": dataclasses.asdict(self.policy), "escape_keys": sorted(self.escape_keys),
-                "noul_true_edge": self.noul_true_edge, "noul_false_edge": self.noul_false_edge}
+                "noul_true_edge": self.noul_true_edge, "noul_false_edge": self.noul_false_edge,
+                "declared_keys": sorted(self.declared_keys), "score_levels": self.score_levels}
 
     @classmethod
     def from_jsonable(cls, data: Mapping[str, Any]) -> "GateInputs":
         return cls(data["question_id"], data["primitive"], GatePolicy(**data["policy"]),
-                   frozenset(data["escape_keys"]), data["noul_true_edge"], data["noul_false_edge"])
+                   frozenset(data["escape_keys"]), data["noul_true_edge"], data["noul_false_edge"],
+                   frozenset(data.get("declared_keys", ())), data.get("score_levels"))
 
 
 def normalize(raw: Mapping[str, float]) -> dict[str, float]:
@@ -135,6 +146,51 @@ def js_divergence_bits(p: Mapping[str, float], q: Mapping[str, float]) -> float:
         if b > 0.0:
             terms.append(0.5 * b * math.log2(b / m))
     return math.fsum(terms)
+
+
+def validate_support(gi: GateInputs, raw_probs: Mapping[str, float]) -> None:
+    """Enforce the declared output space on a returned distribution.
+
+    A choice specification defines the admissible support, not merely the
+    request sent to a cooperative backend: the distribution must carry
+    **exactly** the declared keys — a key the question never declared must
+    never be able to win a ratification, and a declared key must never be
+    silently imputed (the documented adapter zero-fill has already happened
+    by the time a distribution gets here). A score must return exactly the
+    declared ``1..k``, and distinct wire keys must not collide into one
+    apparently valid level. Violations are backend contract defects and raise,
+    like every other malformed input; legacy gate inputs without the metadata
+    (v1/v2 ledger records) skip validation — historical replay semantics.
+    """
+    if gi.primitive == CHOICE:
+        if not gi.declared_keys:
+            return
+        keys = set(raw_probs)
+        if keys != set(gi.declared_keys):
+            raise ValueError(
+                "choice distribution must carry exactly the declared option set: "
+                f"undeclared {sorted(keys - set(gi.declared_keys))}, "
+                f"missing {sorted(set(gi.declared_keys) - keys)}"
+            )
+    elif gi.primitive == SCORE:
+        if gi.score_levels is None:
+            return
+        try:
+            levels = {int(k) for k in raw_probs}
+        except (TypeError, ValueError) as exc:
+            raise ValueError("score keys must be rubric level integers") from exc
+        if len(levels) != len(raw_probs):
+            raise ValueError("score keys must not collide as rubric levels")
+        if levels != set(range(1, gi.score_levels + 1)):
+            raise ValueError(
+                f"score levels must be exactly 1..{gi.score_levels} as declared; "
+                f"got {sorted(levels)}"
+            )
+    elif gi.primitive == NOUL:
+        if set(raw_probs) != {"true", "false"}:
+            raise ValueError("noul distribution must contain exactly 'true' and 'false'")
+    else:
+        raise ValueError(f"unknown primitive: {gi.primitive!r}")
 
 
 def evaluate_choice(gi: GateInputs, raw_probs: Mapping[str, float], replay_digest: str) -> DecisionVerdict:
@@ -230,4 +286,5 @@ def evaluate(gi: GateInputs, raw_probs: Mapping[str, float], replay_digest: str)
     tau = gi.policy.conformal_tau
     if tau is not None and (not math.isfinite(tau) or not 0.0 <= tau <= 1.0):
         raise ValueError("conformal_tau must be finite and in [0, 1]")
+    validate_support(gi, raw_probs)
     return handlers[gi.primitive](gi, raw_probs, replay_digest)

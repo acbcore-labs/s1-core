@@ -11,7 +11,7 @@ from s1core import (
     normalized_entropy,
     temperature_scale,
 )
-from s1core.gates import evaluate
+from s1core.gates import evaluate, validate_support
 
 import sys
 from pathlib import Path
@@ -183,6 +183,84 @@ class JSDivergenceTests(unittest.TestCase):
     def test_symmetric(self):
         p, q = {"a": 0.8, "b": 0.2}, {"a": 0.3, "b": 0.7}
         self.assertAlmostEqual(js_divergence_bits(p, q), js_divergence_bits(q, p), places=12)
+
+
+class DeclaredSupportTests(unittest.TestCase):
+    """The declared output space is the law a returned distribution is judged
+    against — a key the question never declared can never win a ratification,
+    and a declared key can never be silently imputed."""
+
+    def declared_choice(self) -> GateInputs:
+        return GateInputs("q", "choice", GatePolicy(), declared_keys=frozenset({"a", "b"}))
+
+    def declared_score(self, k: int = 3) -> GateInputs:
+        return GateInputs("q", "score", GatePolicy(), score_levels=k)
+
+    def test_undeclared_key_raises(self):
+        with self.assertRaises(ValueError):
+            evaluate(self.declared_choice(), {"not_a_declared_option": 1.0}, "")
+        with self.assertRaises(ValueError):
+            evaluate(self.declared_choice(), {"a": 1.0, "b": 0.0, "stray": 0.0}, "")
+
+    def test_incomplete_support_raises(self):
+        # a confident winner with declared options missing is a backend
+        # contract defect, not a ratification
+        with self.assertRaises(ValueError):
+            evaluate(self.declared_choice(), {"a": 1.0}, "")
+
+    def test_complete_support_ratifies(self):
+        verdict = evaluate(self.declared_choice(), {"a": 0.9, "b": 0.1}, "")
+        self.assertEqual(verdict.status.name, "RATIFIED")
+        self.assertEqual(verdict.value, "a")
+
+    def test_score_support_must_equal_declared_k(self):
+        with self.assertRaises(ValueError):
+            evaluate(self.declared_score(3),
+                     {"1": 0.5, "2": 0.25, "3": 0.125, "4": 0.125}, "")
+        with self.assertRaises(ValueError):
+            evaluate(self.declared_score(3), {"1": 0.5, "2": 0.5}, "")
+
+    def test_score_level_collision_raises(self):
+        # "1" and "01" are distinct wire keys that collapse to one level
+        with self.assertRaises(ValueError):
+            evaluate(self.declared_score(3), {"1": 0.5, "01": 0.5, "2": 0.5}, "")
+
+    def test_non_integer_score_keys_raise(self):
+        with self.assertRaises(ValueError):
+            evaluate(self.declared_score(2), {"low": 0.5, "high": 0.5}, "")
+
+    def test_legacy_inputs_without_metadata_keep_historical_semantics(self):
+        # no declared metadata (v1/v2 ledger records) -> validate_support is a
+        # no-op; the gate judges the distribution exactly as before
+        verdict = evaluate(GateInputs("q", "choice", GatePolicy()), {"whatever": 1.0}, "")
+        self.assertEqual(verdict.status.name, "RATIFIED")
+        self.assertEqual(verdict.value, "whatever")
+        verdict = evaluate(GateInputs("q", "score", GatePolicy()),
+                           {"1": 0.98, "2": 0.01, "3": 0.01}, "")
+        self.assertEqual(verdict.status.name, "RATIFIED")
+
+    def test_noul_support_is_still_exactly_true_false(self):
+        with self.assertRaises(ValueError):
+            validate_support(GateInputs("n", "noul", GatePolicy()),
+                             {"true": 1.0, "yes": 0.0})
+
+    def test_unknown_primitive_raises(self):
+        with self.assertRaises(ValueError):
+            validate_support(GateInputs("q", "gossip", GatePolicy()), {"a": 1.0})
+
+    def test_jsonable_round_trip_keeps_declared_support(self):
+        restored = GateInputs.from_jsonable(self.declared_choice().to_jsonable())
+        self.assertEqual(restored.declared_keys, frozenset({"a", "b"}))
+        restored = GateInputs.from_jsonable(self.declared_score().to_jsonable())
+        self.assertEqual(restored.score_levels, 3)
+
+    def test_legacy_jsonable_loads_with_empty_defaults(self):
+        legacy = GateInputs.from_jsonable({
+            "question_id": "q", "primitive": "choice", "policy": {},
+            "escape_keys": [], "noul_true_edge": 0.75, "noul_false_edge": 0.35,
+        })
+        self.assertEqual(legacy.declared_keys, frozenset())
+        self.assertIsNone(legacy.score_levels)
 
 
 if __name__ == "__main__":

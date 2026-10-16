@@ -37,6 +37,7 @@ from .audit import (
     AuditRecord,
     InMemoryAuditLedger,
     JsonlAuditLedger,
+    compute_spec_digest,
     replay_verdict,
     verify_chain,
 )
@@ -75,6 +76,7 @@ from .gates import (
     normalized_entropy,
     normalize,
     temperature_scale,
+    validate_support,
 )
 from .hashing import canonical_json, digest_of
 from .harness import System1Harness
@@ -121,6 +123,7 @@ __all__ = [
     # gates (Stage 4)
     "GateInputs",
     "evaluate",
+    "validate_support",
     "normalize",
     "temperature_scale",
     "normalized_entropy",
@@ -132,6 +135,7 @@ __all__ = [
     "AuditRecord",
     "InMemoryAuditLedger",
     "JsonlAuditLedger",
+    "compute_spec_digest",
     "replay_verdict",
     "verify_chain",
     # backends

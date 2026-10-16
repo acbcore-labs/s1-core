@@ -19,7 +19,11 @@ held-out data, not conditional accuracy of the subset the harness admits.
 Temperature fitting and conformal calibration must see disjoint samples;
 dataset shift and selection effects require separate evaluation. Labels come
 from production ground truth or a strong System 2 judge; nothing here is
-task-specific.
+task-specific. ``Sample`` is deliberately a bare ``(distribution, label)``
+pair: label *provenance* — source kind, labeler identity, observation time,
+and correspondence to the exact decision — belongs to the label stream
+upstream of these fits, enforced where labels are joined to ledger records
+(see ``examples/nightly_recalibration.py``).
 """
 
 from __future__ import annotations

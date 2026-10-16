@@ -4,7 +4,7 @@ import unittest
 from contextlib import contextmanager
 
 from s1core import ChoiceSpec, GatePolicy, System1Harness
-from s1core.backends import LexicalHeuristicDriver, ShadowTeeDriver
+from s1core.backends import BackendError, LexicalHeuristicDriver, ShadowTeeDriver
 from s1core.backends.base import StateHandle
 from s1core.backends.lexical import state_tokens
 
@@ -127,6 +127,32 @@ class ShadowTeeDriverTests(unittest.TestCase):
         verdicts = System1Harness(tee).evaluate({}, [lane_spec()])
         self.assertEqual(verdicts["lane"].value, "fast")
         self.assertEqual(len(self.seen), 1)
+
+
+class TypeSafeParserTests(unittest.TestCase):
+    """The wire adapter absorbs documented differences (zero-filling omitted
+    declared options) and rejects anything the question never declared."""
+
+    def compiled(self):
+        return lane_spec().compile()
+
+    def body(self, probabilities):
+        return {"answers": {"lane": {"type": "choice", "probabilities": probabilities}}}
+
+    def test_declared_options_zero_fill(self):
+        from s1core.backends.typesafe import typesafe_response_parser
+        parsed = typesafe_response_parser(self.body({"fast": 0.9}), {"lane": self.compiled()})
+        # every declared option — the escape hatches included — is filled
+        self.assertEqual(parsed["lane"]["fast"], 0.9)
+        self.assertEqual(parsed["lane"]["slow"], 0.0)
+        self.assertEqual(set(parsed["lane"]), set(self.compiled().criteria))
+
+    def test_undeclared_wire_key_is_rejected(self):
+        from s1core.backends.typesafe import typesafe_response_parser
+        with self.assertRaises(BackendError):
+            typesafe_response_parser(
+                self.body({"fast": 0.9, "slow": 0.1, "stray_option": 0.5}),
+                {"lane": self.compiled()})
 
 
 if __name__ == "__main__":

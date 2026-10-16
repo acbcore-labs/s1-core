@@ -30,6 +30,7 @@ from s1core import (  # noqa: E402
     LexicalHeuristicDriver,
     System1Harness,
 )
+from s1core.audit import SCHEMA_VERSION  # noqa: E402
 
 
 def _request(base, path, body=None):
@@ -96,7 +97,7 @@ class UiServerTests(unittest.TestCase):
     def test_state_endpoint(self):
         status, body, _ = _request(self.base, "/api/state")
         self.assertEqual(200, status)
-        self.assertEqual("s1core.audit/2", body["schema_version"])
+        self.assertEqual(SCHEMA_VERSION, body["schema_version"])
         self.assertIn(body["backend"]["kind"], ("toy", "live"))
         self.assertEqual(body["key_present"], body["backend"]["kind"] == "live")
 
@@ -134,7 +135,7 @@ class UiServerTests(unittest.TestCase):
         ratified = [r for r in payload["rows"] if r["status"] == "RATIFIED"]
         self.assertTrue(ratified, "toy sensor should ratify the aligned lane")
         self.assertEqual(payload["records"][0]["schema_version"],
-                         "s1core.audit/2")
+                         SCHEMA_VERSION)
 
     def test_evaluate_dependency_skip_and_spec_error(self):
         body = {
@@ -272,11 +273,19 @@ class UiServerTests(unittest.TestCase):
         self.assertEqual("certification", payload["kind"])
         self.assertTrue(payload["chain_verified"])
         self.assertEqual(0, payload["replay"]["wrong"])
-        self.assertEqual(2, len(payload["candidates"]))
+        self.assertEqual(3, len(payload["candidates"]))
         promoted = [c["promoted"] for c in payload["candidates"]]
-        self.assertEqual([False, True], promoted)
-        self.assertEqual(2, payload["candidates"][0]["wrong_count"])
-        self.assertEqual(0, payload["candidates"][1]["wrong_count"])
+        self.assertEqual([False, True, False], promoted)
+        # the regressed candidate fails on incorrect ratifications
+        self.assertEqual(2, payload["candidates"][0]["incorrect_count"])
+        self.assertEqual(0, payload["candidates"][1]["incorrect_count"])
+        self.assertEqual([], payload["candidates"][1]["coverage_failures"])
+        # the vacuous abstainer: zero wrongness, rejected on declared coverage
+        vacuous = payload["candidates"][2]
+        self.assertEqual(0, vacuous["incorrect_count"])
+        self.assertEqual(2, len(vacuous["coverage_failures"]))
+        for spec_q in vacuous["per_question"].values():
+            self.assertEqual(0.0, spec_q["coverage"])
         self.assertEqual(payload["pinned_cases"], len(payload["rows"]))
 
     def test_cascade_and_recalibration_payloads(self):
