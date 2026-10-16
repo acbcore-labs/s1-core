@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.14%2B-blue.svg)](https://www.python.org/)
 [![Dependencies](https://img.shields.io/badge/dependencies-zero-brightgreen.svg)]()
-[![Tests](https://img.shields.io/badge/tests-148%20passing-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-176%20passing-brightgreen.svg)]()
 
 **S1-Core is a Python harness for System 1 inference models** (decision
 models like TypeSafe's Jev): models that classify, score, and gate in a
@@ -17,8 +17,10 @@ replayable audit ledger.
 The harness treats the model as a **bounded stochastic sensor**, never an
 oracle: every output passes through deterministic preprocessing, mathematical
 admissibility gates, and a content-addressed audit ledger before application
-code sees anything. **A value is released if and only if the harness can
-defend it** (fail-closed, `wrong == 0` admissibility boundary).
+code sees anything. **A value is released only when the declared
+admissibility policy passes** — structurally, no other status ever carries a
+value. Acceptance is auditable; correctness is not decreed by the gate but
+measured against outcomes (see [Semantics and limits](#semantics-and-limits)).
 
 Python ≥ 3.14, zero dependencies (stdlib only). Licensed under
 [MIT](LICENSE).
@@ -95,7 +97,7 @@ Every `DecisionVerdict` carries: `status`, `value` (None unless RATIFIED),
 | 2. Deterministic fact preprocessing | `StateAugmentor` | `s1core.augment` | Date deltas, ratios, structural invariants resolved in native code (zero neural cost) into `@deterministic_facts` before encoding. |
 | 3. Prefix-pinned driver execution | `System1Driver` | `s1core.harness`, `s1core.dag`, `s1core.backends` | State pinned once; topological question **waves** fan out in parallel; Wave N+1 runs only where Wave ≤ N parents ratified with the required values. Optional dual-permutation debiasing. |
 | 4. Calibration + admissibility gate | `AdmissibilityGate` | `s1core.gates`, `s1core.calibration` | Temperature scaling, scale-invariant normalized entropy, top-2 margin, conformal set cardinality, score-mode AAD (bimodality rejection). All pure functions; all inputs validated. |
-| 5. Content-addressed replay ledger | `AuditSink` | `s1core.audit` | Hash-chained JSONL records (canonical state, compiled question, raw distribution, post-gate events, verdict; schema `s1core.audit/2`). `replay_verdict()` re-derives any verdict. |
+| 5. Content-addressed replay ledger | `AuditSink` | `s1core.audit` | Hash-chained JSONL records (canonical state, compiled question, raw distribution, post-gate events, verdict, spec identity; schema `s1core.audit/3`). `replay_verdict()` re-derives any verdict; v1/v2 ledgers replay under their historical semantics. |
 
 **The three primitives** (see design doc Part 1): `choice` (2–255 options,
 discrete distribution + confidence), `score` (2–10 ordered rubric levels →
@@ -111,7 +113,7 @@ expectation `s^`, gated on mode dispersion), `noul` (binary proposition →
 ```bash
 brew install uv                # or: curl -LsSf https://astral.sh/uv/install.sh | sh
 uv sync                        # .venv + editable s1core + dev tools, per uv.lock
-uv run pytest                  # 148 tests + enforced 100% coverage gate
+uv run pytest                  # 176 tests + enforced 100% coverage gate
 uv run python examples/refund_triage.py
 uv run python examples/orthogonal_pr_gate.py
 uv run python examples/calibrate_from_ledger.py
@@ -124,7 +126,7 @@ uv run python examples/proof_of_outcomes.py   # live scorecard when a key is con
 **Without uv — the zero-dependency path (stdlib only):**
 
 ```bash
-PYTHONPATH=src python3 -m unittest discover -s tests   # 148 tests, offline
+PYTHONPATH=src python3 -m unittest discover -s tests   # 176 tests, offline
 ```
 
 CI (`.github/workflows/tests.yml`) runs both paths on Python 3.14 via
@@ -221,11 +223,13 @@ Reading notes — what to look for in each:
   `fit_gate_policy` promotes it: ECE 0.145 → 0.018, coverage 0.900 at
   α = 0.10, zero application changes.
 - **`model_swap_certification.py`** — the production ledger is a frozen
-  eval set. After preflight (chain verified, every verdict replays
-  `wrong == 0`), candidates are judged by one law: ratify no wrong answer.
-  The regressed candidate is rejected with its wrongs *attributed* —
-  `refund_lane` on the two over-total orders; drift (JS divergence) is
-  reported as telemetry, never gated.
+  eval set. After preflight (chain verified, every verdict replays with zero
+  mismatches), candidates are judged by two declared laws: zero incorrect
+  ratifications, and the declared minimum useful coverage met on every
+  question. The regressed candidate is rejected with its errors *attributed*
+  — `refund_lane` on the two over-total orders; the always-abstaining
+  candidate is rejected on coverage, though it ships zero wrongness; drift
+  (JS divergence) is reported as telemetry, never gated.
 - **`nightly_recalibration.py`** — temperature recovers the automation the
   default gate refused (ratified 12.7% → 98.7% at ECE 0.36 → 0.03). The
   residual wrong-while-ratified equals the sensor's confusion rate living
@@ -312,19 +316,27 @@ marketing honest:
   only — score expectations are a `CombinerError`) and uses `p(false)` for a
   ratified False noul. Joint-probability readings require independence, and
   combiners are not automatically audited.
-- **Audit**: `s1core.audit/2` records capture permutation divergence and the
-  loop-guard event; replay reapplies gates and these events — not inference,
-  and not the hidden stream-counter history. Legacy v1 events are inferred
-  from stored telemetry. Gate-code changes can change old replay results;
-  retain the code revision for long-term bit-identical replay. Verify the
-  chain separately.
+- **Audit**: `s1core.audit/3` records capture permutation divergence, the
+  loop-guard event, the loop-guard short circuit, and a `spec_digest`
+  (the *(task prose, sensor)* identity used to group calibration samples —
+  not a complete decision-policy identity). Replay reapplies gates and these
+  events — not inference, and not the hidden stream history. v3 replays
+  enforce the declared output space; v1/v2 ledgers keep historical semantics
+  and the legacy digest algorithm. Gate-code changes can change old replay
+  results; retain the code revision for long-term bit-identical replay.
+  Verify the chain separately.
 - **Operations**: one harness per stream, not concurrently. The loop guard
-  counts consecutive model/gate abstentions across calls; other evaluated
-  statuses reset it and dependency skips do not advance it. The JSONL ledger
-  verifies existing chains before appending but is single-writer — no
-  locking, fsync durability, signing, encryption, or external anchor. An
-  unkeyed chain cannot detect a full-file rewrite; anchor its head digest
-  externally if you need that. Protect raw state/PII and define retention.
+  counts consecutive abstaining *question verdicts* across calls; other
+  evaluated statuses reset the counter and dependency skips do not advance
+  it. A stream that reaches the threshold is **latched**: it initiates no
+  further backend operations (no `pin_state`, no `score_branches`) until the
+  application acknowledges with `harness.reset_stream(stream_id)` — a
+  ratified verdict or a larger threshold never reopens it; work already
+  dispatched is not cancelled. The JSONL ledger verifies existing chains
+  before appending but is single-writer — no locking, fsync durability,
+  signing, encryption, or external anchor. An unkeyed chain cannot detect a
+  full-file rewrite; anchor its head digest externally if you need that.
+  Protect raw state/PII and define retention.
 
 ---
 
@@ -367,7 +379,7 @@ backend: jev-latest — LIVE (TypeSafe Jev)
 
 4) Governance — audit, replay, chain
    audit records             : 12 (content-addressed, hash-chained)
-   replay verification       : 12/12 byte-identical (wrong=0)
+   replay verification       : 12/12 byte-identical (replay_mismatches=0)
    ledger chain verified     : True
 ```
 
@@ -410,7 +422,10 @@ Nothing in the core knows about refunds or pull requests. A new use case is:
 1. **Declare questions.** Frozen dataclasses with full-sentence instructions
    and criteria prose (≥ 4 words instructions, ≥ 3 words criteria — enforced).
    Keys are for *your* code; only prose reaches the model.
-2. **Add fact extractors if the state needs arithmetic/dates:**
+2. **Add fact extractors if the state needs arithmetic/dates** — they must
+   be pure and emit canonical, JSON-stable values (round floats, no
+   locale- or timezone-varying text) so the canonical state — and any
+   downstream prefix caching — stays byte-stable:
 
    ```python
    from s1core import Augmentor, IsoDateDeltaFacts, RatioFacts, CallableExtractor
@@ -469,7 +484,9 @@ class MyLocalKevDriver:
 
 - `score_branches` returns `{question_id: {option_key: probability}}` — score
   **every** criteria key (escape hatches included); unnormalized vectors are
-  fine, the gate normalizes and validates.
+  fine. The gate normalizes, validates, and **enforces the declared output
+  space**: a returned key the question never declared — or a declared key
+  missing from the support — raises rather than ratifies or imputes.
 - Hosted APIs: `driver_from_env()` (or `typesafe_driver(api_key=...)`) gives
   you the live TypeSafe/Jev adapter on `POST /v1/systemone` — it absorbs the
   wire differences (questions as a JSON map, score criteria as an ordered
@@ -483,9 +500,14 @@ class MyLocalKevDriver:
   re-send state; the harness code above them is identical.
 - Order-sensitive backends: set `GatePolicy(debiased_permutation=True)` on
   high-stakes questions — the harness dispatches canonical + reversed option
-  order in the same batch, averages, and refuses when
+  order in the same batch, validates both distributions against the declared
+  support, averages, and refuses when
   `js_divergence_bits(fwd, rev) > max_permutation_divergence` (divergence is
-  in bits, bounded by 1.0; `1.0` is the lawful "never refuse").
+  in bits, bounded by 1.0; `1.0` is the lawful "never refuse"). Treat
+  forward/reverse agreement as evidence of positional stability — an
+  operational diagnostic, not proof of semantic consistency; where options
+  carry materially different meaning, the divergence refusal is the guard,
+  not the average.
 - Shadow-traffic distillation: wrap a driver in `ShadowTeeDriver(primary,
   shadow_local, rate=0.05, on_shadow=...)`, accumulate paired distributions +
   production outcomes, then `fit_gate_policy(samples, calibration_samples=held_out)`
@@ -544,7 +566,8 @@ class MyLocalKevDriver:
   cost center is the model call, and the state KV prefix is encoded once
   across all waves.
 - **Single harness instance per stream**; the loop guard keeps per-stream
-  consecutive-abstention counters and is not thread-safe across streams by
+  consecutive-abstention counters plus a tripped-stream latch (only
+  `reset_stream` clears it) and is not thread-safe across streams by
   design.
 
 ## Layout

@@ -214,7 +214,27 @@ the value is **withheld, not rounded toward an edge**. A 0.71 "yes" is not
 a weak yes; it is an unanswered question (`evaluate_noul`; the README's
 proof run shows `escalate_to_human` landing exactly there).
 
-### 4.6 Order sensitivity, measured and refused
+### 4.6 The declared output space
+
+A choice specification defines the admissible support; it does not merely
+describe the request handed to a cooperative backend. So the gate judges a
+returned distribution against the *declared* space, never against itself:
+`evaluate_choice` must not be able to ratify `{"not_a_declared_option":
+1.0}` just because it is confident (top-1 = 1, margin = 1, entropy = 0 —
+every default threshold passes), and `evaluate_score` must not derive `k`
+from whatever arrived when the rubric declared a specific one. The compiled
+question restates its support in the gate inputs (`declared_keys`,
+`score_levels`), and `validate_support` enforces exactly that set: an
+undeclared key raises, a missing declared key raises — the documented
+adapter zero-fill has already happened by then. Both permutation orders are
+validated *individually before averaging*, because two incomplete supports
+can union to a complete one and averaging must never manufacture validity.
+Violations are backend contract defects and raise, like every other
+malformed input; only legacy ledger records without the metadata keep the
+historical, pre-validation semantics on replay
+(`tests/test_gates.py::DeclaredSupportTests`).
+
+### 4.7 Order sensitivity, measured and refused
 
 Pointer-head decoders can be positionally biased: the same question with
 options in a different order yields a different distribution. That is
@@ -231,12 +251,16 @@ JS(p, q) = ½ KL(p ‖ m) + ½ KL(q ‖ m),   m = (p+q)/2
 symmetric, support-independent, bounded by exactly 1.0 bit — which is why
 `max_permutation_divergence = 1.0` is the *lawful* "never refuse" rather
 than a magic sentinel. Divergence over budget ⇒ `ABSTAINED_GATE`
-(`harness.py::_debias`, `gates.py::js_divergence_bits`). And critically,
+(`harness.py::_debias`, `gates.py::js_divergence_bits`). One honest limit:
+forward/reverse agreement is evidence of *positional* stability — an
+operational diagnostic — not proof of semantic consistency; where options
+carry materially different evidence demands, the divergence refusal is the
+safe path, not the average. And critically,
 the measured divergence is recorded in the audit's `postprocessing` map,
 so replay re-applies the refusal — a verdict that was refused for
 instability cannot resurrect itself on replay.
 
-### 4.7 Content addressing and the chain
+### 4.8 Content addressing and the chain
 
 Everything content-addressed runs through one function:
 `digest_of = blake2b(canonical_json(obj), 16 bytes)`, where
@@ -253,15 +277,23 @@ single-writer by law. The honest limit: an *unkeyed* chain cannot detect a
 wholesale rewrite of the whole file — if you need tamper-*proof* rather
 than tamper-*evident*, anchor the head digest with an external party.
 `verify_chain` and `replay_verdict` are the two readers;
-`tests/test_replay.py` enforces `wrong == 0` over every recorded verdict,
-including a randomized sweep.
+`tests/test_replay.py` enforces replay mismatches == 0 over every recorded
+verdict, including a randomized sweep. The v3 schema adds two identities:
+`spec_digest` — the state-independent *(task prose, sensor)* key that
+calibration grouping joins on, deliberately narrower than a decision-policy
+identity (the fitted policy is its *output*, not an input; a `model_id`
+such as `jev-latest` is an alias, not an immutable revision) — and a v3
+replay digest that covers the full effective gate inputs, so two
+configurations differing in any acceptance behavior (noul edges included,
+which the legacy policy-only digest missed) can never share a replay
+address. v1/v2 records replay under the historical algorithm and semantics.
 
 Why blake2b and not blake3: identical content-addressing semantics, zero
 dependencies. The chain is for integrity of decision records, not
 adversarial cryptography — and the zero-dependency law is what keeps the
 core auditable by reading.
 
-### 4.8 Combiners, and their honest caveat
+### 4.9 Combiners, and their honest caveat
 
 `NoisyANDCombiner` multiplies selected-label probabilities across
 signals; `LatticeCombiner` applies a deterministic rule with the minimum
@@ -274,7 +306,7 @@ independence across signals, which is a property of your question
 number is decorative. Score expectations are refused outright —
 multiplying averages is a category error (`tests/test_combiners.py`).
 
-### 4.9 Mechanical sympathy notes
+### 4.10 Mechanical sympathy notes
 
 The hot path is small and the cost center is the model call, so the
 optimization targets are: **encode the state prefix once** per evaluate
@@ -299,19 +331,30 @@ Three sentences the whole system is willing to defend:
    non-RATIFIED status carries `value = None` — structurally, in the type
    (`tests/test_harness.py` invariant) — so downstream code cannot consume
    an undischarged judgment even by accident.
-3. **Wrongness is gateable; drift is telemetry.** The certificate law for
-   promoting a model is exactly `wrong == 0` against pinned outcomes where
-   a licence already exists — a binary, reproducible identity. Distribution
-   drift (JS divergence, probability deltas) is *reported*, never gated: a
-   drift budget would be a tuned threshold pretending to be a law. The
-   model-swap example is the two columns side by side — REJECT for wrong=2,
-   PROMOTE for wrong=0, drift printed as context.
+3. **Wrongness is gateable; coverage is declared; drift is telemetry.** The
+   certificate law for promoting a model is exactly zero incorrect
+   ratifications against pinned outcomes where a licence already exists —
+   a binary, reproducible identity — *plus* the declared minimum useful
+   coverage met on every question, a business requirement stated in advance.
+   The coverage floor is not a second tuned threshold: it is the answer to
+   "how much automation must survive the swap," without which an
+   always-abstaining sensor certifies vacuously. Distribution drift (JS
+   divergence, probability deltas) is *reported*, never gated: a drift
+   budget would be a tuned threshold pretending to be a law. The model-swap
+   example is the columns side by side — REJECT for two incorrect
+   ratifications, PROMOTE for zero plus coverage met, and REJECT for the
+   vacuous abstainer that ships zero wrongness and zero automation.
 
 And the loop guard ties the epistemology to operations: consecutive
-model/gate abstentions on a stream are counted, and a stream that cannot
-stop abstaining is *stopped* (`LOOP_GUARD_TRIPPED`) rather than allowed to
-spin an agent forever. An authority that can always say "no" must
-occasionally also say "stop."
+abstaining question verdicts are counted per stream, and a stream that
+reaches the threshold is *latched* — it initiates no further backend
+operations (no `pin_state`, no `score_branches`) until the application
+acknowledges with `reset_stream`. Work already dispatched is not
+cancelled; a ratified verdict resets the counter but never clears the
+latch. Stopping must mean the spend stops too, or the guard only
+relabels the hemorrhage. An authority that can always say "no" must
+occasionally also say "stop — and stay stopped until someone competent
+says go."
 
 ## 6. The three pillars, applied
 
@@ -345,7 +388,7 @@ occasionally also say "stop."
 
 ---
 
-*Everything asserted here is executable: `uv run pytest` (148 tests, 100%
+*Everything asserted here is executable: `uv run pytest` (176 tests, 100%
 coverage gate) or `PYTHONPATH=src python3 -m unittest discover -s tests`
 on the stdlib path. Claims require re-derivable evidence; the test suite
 is where this document goes to be checked.*
