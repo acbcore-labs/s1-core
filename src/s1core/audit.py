@@ -252,8 +252,8 @@ def replay_verdict(record: Mapping[str, Any]) -> DecisionVerdict:
     if schema != SCHEMA_VERSION and schema not in _LEGACY_SCHEMAS:
         raise ValueError("unsupported audit schema")
     events = record.get("postprocessing") or {}
-    short_circuit = events.get("loop_guard_short_circuit")
-    if short_circuit is not None and not isinstance(short_circuit, bool):
+    short_circuit = events.get("loop_guard_short_circuit", False)
+    if "loop_guard_short_circuit" in events and not isinstance(short_circuit, bool):
         raise ValueError("loop_guard_short_circuit must be a boolean")
     if short_circuit and raw:
         raise ValueError("a short-circuited record must carry no raw distribution: "

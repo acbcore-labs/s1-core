@@ -308,7 +308,7 @@ class SchemaV3LawTests(unittest.TestCase):
             replay_verdict(record)
 
     def test_short_circuit_flag_must_be_a_boolean(self):
-        for flag in (1, "yes"):
+        for flag in (None, 0, 1, "", "yes"):
             with self.subTest(flag=flag):
                 record = self.ratified_record()
                 record["postprocessing"] = dict(record["postprocessing"],
